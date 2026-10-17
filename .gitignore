@@ -1,0 +1,17 @@
+.DS_Store
+node_modules/
+dist/
+web/test-results/
+web/playwright-report/
+*.onnx
+__pycache__/
+.venv/
+.pytest_cache/
+ios/*.xcodeproj/
+ios/build/
+ios/Mishkefet/Model/
+.build/
+.swiftpm/
+Package.resolved
+*.xcuserstate
+xcuserdata/

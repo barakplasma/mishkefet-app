@@ -1,0 +1,14 @@
+{
+  "round_size": 40,
+  "inactivity_ms": 1200,
+  "steps": 100,
+  "lr": 0.001,
+  "beta1": 0.9,
+  "beta2": 0.999,
+  "eps": 1e-8,
+  "l2": 0.1,
+  "aug_views": { "ios": 4, "web": 1 },
+  "max_train_samples": 240,
+  "held_out_modulo": 8,
+  "accept_if_accuracy_drop_at_most": 0.0
+}
