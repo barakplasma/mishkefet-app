@@ -1,0 +1,41 @@
+{
+  "name": "mishkefet-web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Mishkefet (משקפת): on-device Hebrew handwriting recognition in the browser",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "test:golden": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/golden.ts",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@fontsource-variable/rubik": "^5.3.0",
+    "@fontsource/amatic-sc": "^5.2.0",
+    "@fontsource/karantina": "^5.3.0",
+    "onnxruntime-web": "^1.30.0",
+    "pdfjs-dist": "^5.7.284",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@jsquash/jpeg": "^1.6.0",
+    "@playwright/test": "^1.64.0",
+    "@types/node": "^26.6.4",
+    "@types/pngjs": "^6.0.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "@webgpu/types": "^0.1.74",
+    "onnxruntime-node": "^1.30.0",
+    "pngjs": "^7.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.3",
+    "vitest": "^4.1.11"
+  }
+}
