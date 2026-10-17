@@ -20,13 +20,13 @@ KEY_PATH="${DIR}/AuthKey_${KEY_ID}.p8"
 [ -f "$KEY_PATH" ] || { echo "Missing $KEY_PATH"; exit 1; }
 security find-identity -v -p codesigning | grep -q "Apple Distribution: .*(${TEAM_ID})" \
   || { echo "No Apple Distribution identity for ${TEAM_ID} in the keychain"; exit 1; }
-# Signing (archive/export) goes through the Apple ID signed in to Xcode (Settings, Accounts):
-# the personal API key can call App Store Connect but Xcode rejects it for provisioning.
-# MK_XCODE_KEY=1 switches to key-based signing (needs an Admin-role key).
+# Signing is manual: the Release config uses the keychain's distribution identity and an
+# App Store profile that release/asc-profile.mjs creates with the API key, so no Apple ID
+# has to be signed in to Xcode. MK_XCODE_KEY=1 additionally passes the key to xcodebuild.
 if [ "${MK_XCODE_KEY:-0}" = "1" ]; then
   AUTH=(-allowProvisioningUpdates -authenticationKeyPath "$KEY_PATH" -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER")
 else
-  AUTH=(-allowProvisioningUpdates)
+  AUTH=()
 fi
 
 BUILD="$(date -u +%Y%m%d%H%M)"   # build numbers only ever increase
@@ -38,17 +38,23 @@ mkdir -p "$OUT"
 echo "== Model files"
 ../tools/model/fetch-model.sh Mishkefet/Model >/dev/null
 
+echo "== Provisioning profile (App Store, via the API)"
+SERIAL="$(security find-certificate -a -c "Apple Distribution: Itay Inbar (${TEAM_ID})" -p | openssl x509 -noout -serial | cut -d= -f2)"
+node --no-warnings release/asc-profile.mjs "$BUNDLE_ID" "$SERIAL"
+
 echo "== Project"
 xcodegen generate >/dev/null
 
 echo "== Tests"
+if [ "${MK_SKIP_TESTS:-0}" = "1" ]; then echo "skipped (MK_SKIP_TESTS=1)"; else
 (cd MishkefetCore && swift test -q)
 xcodebuild -project Mishkefet.xcodeproj -scheme Mishkefet -destination "platform=iOS Simulator,name=${TEST_SIMULATOR:-iPhone 17 Pro}" \
   CODE_SIGNING_ALLOWED=NO test -quiet
+fi
 
 echo "== Archive build ${BUILD}"
 xcodebuild -project Mishkefet.xcodeproj -scheme Mishkefet -configuration Release -destination 'generic/platform=iOS' \
-  -archivePath "$ARCHIVE" "${AUTH[@]}" DEVELOPMENT_TEAM="$TEAM_ID" CURRENT_PROJECT_VERSION="$BUILD" archive -quiet
+  -archivePath "$ARCHIVE" ${AUTH[@]+"${AUTH[@]}"} DEVELOPMENT_TEAM="$TEAM_ID" CURRENT_PROJECT_VERSION="$BUILD" archive -quiet
 
 cat > "${OUT}/ExportOptions-${BUILD}.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -57,7 +63,9 @@ cat > "${OUT}/ExportOptions-${BUILD}.plist" <<PLIST
   <key>method</key><string>app-store-connect</string>
   <key>destination</key><string>export</string>
   <key>teamID</key><string>${TEAM_ID}</string>
-  <key>signingStyle</key><string>automatic</string>
+  <key>signingStyle</key><string>manual</string>
+  <key>signingCertificate</key><string>Apple Distribution</string>
+  <key>provisioningProfiles</key><dict><key>${BUNDLE_ID}</key><string>Mishkefet App Store</string></dict>
   <key>uploadSymbols</key><true/>
   <key>manageAppVersionAndBuildNumber</key><false/>
 </dict></plist>
@@ -65,11 +73,12 @@ PLIST
 
 echo "== Export (App Store signing)"
 xcodebuild -exportArchive -archivePath "$ARCHIVE" -exportOptionsPlist "${OUT}/ExportOptions-${BUILD}.plist" \
-  -exportPath "$EXPORT" "${AUTH[@]}" -quiet
+  -exportPath "$EXPORT" ${AUTH[@]+"${AUTH[@]}"} -quiet
 IPA="$(ls "${EXPORT}"/*.ipa | head -1)"
 # Every bundle in the IPA must carry the personal team's distribution signature.
 CHECK="$(mktemp -d)"; unzip -q "$IPA" -d "$CHECK"
 for bundle in "$CHECK"/Payload/*.app "$CHECK"/Payload/*.app/PlugIns/*.appex; do
+  [ -e "$bundle" ] || continue
   sig="$(codesign -dvv "$bundle" 2>&1 || true)"
   case "$sig" in
     *"TeamIdentifier=${TEAM_ID}"*"Authority=Apple Distribution"*|*"Authority=Apple Distribution"*"TeamIdentifier=${TEAM_ID}"*) ;;

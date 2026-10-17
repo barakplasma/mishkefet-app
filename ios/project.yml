@@ -93,6 +93,14 @@ targets:
         ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: YES
         ENABLE_PREVIEWS: YES
         SWIFT_EMIT_LOC_STRINGS: NO
+      configs:
+        # Release archives sign with the personal team's distribution certificate and
+        # the App Store profile that release/asc-profile.mjs creates through the API,
+        # so a release needs no Apple ID signed in to Xcode.
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "Mishkefet App Store"
     info:
       path: Mishkefet/Info.plist
       properties:
