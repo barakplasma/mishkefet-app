@@ -695,7 +695,12 @@ def estimate_line_pitch(binary: np.ndarray) -> float:
         return 30.0
     n = len(prof)
     lo = max(8, int(n * 0.004))
-    hi = min(n - 1, int(n * 0.15))
+    # hebocr searched up to 0.15 n, which assumes a page of many lines; a photo
+    # of a few big lines (pitch 18% of the height and more) then fell back to a
+    # stroke-texture lag and shattered every line. Half the height still needs
+    # two lines to see a rhythm, and the first-peak rule leaves every page the
+    # old window handled unchanged (checked on the 10 benchmark pages).
+    hi = min(n - 1, n // 2)
     if hi <= lo + 2:
         return 30.0
     win = np.array([float(np.dot(prof[: n - lag], prof[lag:])) for lag in range(lo, hi)])

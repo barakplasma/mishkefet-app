@@ -35,12 +35,16 @@ running windows (van Herk / Gil-Werman makes those O(1) per pixel).
    the binary mask this way and the original RGB the same way with bicubic
    sampling and white fill (platform rotation is fine for RGB: it only feeds crops).
 4. **estimate_line_pitch(binary)**: `prof = row sums - mean` (double). If all
-   zero: 30. `lo = max(8, trunc(0.004 n))`, `hi = min(n - 1, trunc(0.15 n))`; if
+   zero: 30. `lo = max(8, trunc(0.004 n))`, `hi = min(n - 1, n // 2)`; if
    `hi <= lo + 2`: 30. `win[k] = sum_t prof[t] * prof[t + lag]` for `lag = lo..hi-1`.
    First `k` in `1..len-2` with `win[k] > win[k-1]`, `win[k] >= win[k+1]`, `win[k] > 0`;
    else argmax. Pitch = `lo + k`.
    This first-peak rule is fragile on very dense pages (a tiny change flips it to
    a sub-harmonic); it is kept because it is what the shipped numbers used.
+   **Deviation from hebocr:** hebocr searched lags up to `0.15 n`, so a photo of a
+   few large lines (spacing above 15% of the height) fell back to a tiny lag and
+   was cut into fragments. Searching up to `n // 2` fixes that and gives identical
+   results on every page the old window handled.
 5. **remove_rules(binary, p)**: `L = max(40, trunc(2p))`, `t = max(3, trunc(0.28 p))`.
    - Line kernel for angle `a` in `-2, -1, -0.4, 0, 0.4, 1, 2`: `drop = round(tan(a) * (L-1))`
      (half to even), `rows = |drop| + 1`, `y0 = 0 if drop >= 0 else rows - 1`, cells of an

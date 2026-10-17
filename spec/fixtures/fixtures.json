@@ -8,6 +8,11 @@
     {
       "file": "pages/page2.jpg",
       "source": "Page 107_1"
+    },
+    {
+      "file": "pages/big-lines.png",
+      "source": "rendered for this repo",
+      "lines": 5
     }
   ],
   "lines": [

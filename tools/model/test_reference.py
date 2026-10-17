@@ -177,7 +177,8 @@ def iou(a, b):
 
 
 def test_segmentation_matches_hebocr():
-    for page in FIX["pages"]:
+    # big-lines.png is where we deliberately differ (wider pitch search, spec/segmenter.md)
+    for page in [p for p in FIX["pages"] if not p["file"].endswith("big-lines.png")]:
         im = Image.open(SPEC / "fixtures" / page["file"]).convert("RGB")
         _, boxes, angle = S.segment_page(im)
         theirs = [{"x": b.x, "y": b.y, "w": b.w, "h": b.h} for b in boxes]

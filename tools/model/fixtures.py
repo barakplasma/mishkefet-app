@@ -25,6 +25,30 @@ LINES_PER_PAGE = 6
 PAGE_MAX_SIDE = 1600
 
 
+BIG_LINES = ["שלום לכולם וברוכים הבאים", "זהו דף עם מעט שורות גדולות", "המרווח בין השורות רחב מאוד", "כדי לבדוק את חיתוך השורות", "תודה רבה"]
+
+
+def big_lines_page(out):
+    """A photo-like page of five big lines, line spacing about 19% of its height.
+
+    hebocr's segmenter only searched spacings up to 15% of the height and cut
+    pages like this into fragments; it is the regression fixture for that.
+    Rendered here (macOS Corsiva Hebrew), so it carries no third-party licence."""
+    from PIL import ImageDraw, ImageFilter, ImageFont
+
+    w, h, pitch = 986, 451, 84
+    im = Image.new("RGB", (w, h), (226, 212, 186))
+    d = ImageDraw.Draw(im)
+    font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Corsiva.ttc", 62)
+    for i, line in enumerate(BIG_LINES):
+        text = line[::-1]  # PIL without libraqm lays out left to right
+        tw = d.textlength(text, font=font)
+        d.text(((w - tw) / 2, 16 + i * pitch), text, fill=(30, 28, 26), font=font, stroke_width=3, stroke_fill=(30, 28, 26))
+    im = im.filter(ImageFilter.GaussianBlur(0.6))
+    im.save(out / "pages" / "big-lines.png", optimize=True)
+    return {"file": "pages/big-lines.png", "source": "rendered for this repo", "lines": len(BIG_LINES)}
+
+
 def main():
     hebocr()
     from hebocr.data.hebrew_ink import _crop_polygon, _polygon, _usable
@@ -73,6 +97,7 @@ def main():
                 if taken >= LINES_PER_PAGE:
                     break
 
+    meta["pages"].append(big_lines_page(out))
     (out / "fixtures.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
     print(len(meta["pages"]), "pages,", len(meta["lines"]), "lines")
 

@@ -169,7 +169,8 @@ export function estimateLinePitch(binary: Mask): number {
   }
   if (!any) return 30
   const lo = Math.max(8, Math.trunc(n * 0.004))
-  const hi = Math.min(n - 1, Math.trunc(n * 0.15))
+  // up to half the height, not hebocr's 0.15: a few big lines would otherwise shatter (spec/segmenter.md)
+  const hi = Math.min(n - 1, Math.trunc(n / 2))
   if (hi <= lo + 2) return 30
   const win = new Float64Array(hi - lo)
   for (let lag = lo; lag < hi; lag++) {

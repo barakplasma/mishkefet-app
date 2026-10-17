@@ -232,7 +232,8 @@ public enum Segmenter {
         let mean = prof.reduce(0, +) / Double(n)
         prof = prof.map { $0 - mean }
         if !prof.contains(where: { $0 != 0 }) { return 30 }
-        let lo = max(8, Int(Double(n) * 0.004)), hi = min(n - 1, Int(Double(n) * 0.15))
+        // up to half the height, not hebocr's 0.15: a few big lines would otherwise shatter (spec/segmenter.md)
+        let lo = max(8, Int(Double(n) * 0.004)), hi = min(n - 1, n / 2)
         if hi <= lo + 2 { return 30 }
         let win: [Double] = (lo..<hi).map { lag in
             var s = 0.0
