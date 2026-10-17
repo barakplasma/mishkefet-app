@@ -14,9 +14,11 @@ the reference disagree, the reference is right.
 | [lm-format.md](lm-format.md) | `charlm.bin`, `words.bin` | `CharLM`, `WordLM` |
 | [segmenter.md](segmenter.md) | page to line boxes | `segment_page` |
 | [strokes.md](strokes.md) | training canvas strokes to a line image | `strokes.render` |
-| [adapter.md](adapter.md) | on-device fine-tuning (CTC, head, adapter, Adam) | `adapter.py` |
+| [adapter.md](adapter.md) | on-device fine-tuning (CTC, head, Adam) | `adapter.py` |
+| [training.md](training.md) | the training screen, word choice, rounds, corrected lines | web `lib/training.ts`, `lib/words.ts` |
 
 `charset.json` is the 198 output classes (index 0 is the CTC blank, 38 is space).
+`adapt.json` holds the fine-tuning numbers, `train-words.json` the word pool.
 
 `fixtures/` are Pinkas lines and pages (CC-BY-4.0, https://zenodo.org/records/3569694),
 early modern Hebrew. They test fidelity, not accuracy.

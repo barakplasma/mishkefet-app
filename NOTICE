@@ -1,0 +1,31 @@
+Mishkefet bundles or downloads the following third-party material.
+
+Handwriting recognition model
+-----------------------------
+itayinbar/Mishkefet-v1                          CC-BY-NC-SA-4.0
+  https://huggingface.co/itayinbar/Mishkefet-v1
+  Trained on, among others, BiblIA (CC-BY-NC-SA-4.0), Pinkas (CC-BY-4.0),
+  DiffusionPen Hebrew (CC-BY-4.0), HHD (CC-BY-3.0) and Teklia line datasets;
+  the language models are built from Hebrew Wikipedia (CC-BY-SA). See the
+  model card for the full list. The NonCommercial-ShareAlike terms of the
+  weights apply to this app: it is free and has no ads.
+  The iPhone app bundles the ONNX files; the web app downloads them from the
+  Hugging Face CDN at runtime.
+
+Runtimes and libraries
+----------------------
+ONNX Runtime (onnxruntime-web, onnxruntime-c)   MIT, Copyright (c) Microsoft Corporation
+PDF.js (pdfjs-dist, web only)                   Apache-2.0, Mozilla Foundation
+
+Fonts
+-----
+Karantina, by Rony Koch                          SIL Open Font License 1.1
+Rubik, by Hubert & Fischer and Meir Sadan         SIL Open Font License 1.1
+Amatic SC, by Vernon Adams                        SIL Open Font License 1.1
+  https://openfontlicense.org
+
+Test fixtures
+-------------
+spec/fixtures/ are lines and pages from the Pinkas dataset
+(https://zenodo.org/records/3569694), CC-BY-4.0, by Irina Rabaev,
+Berat Kurar Barakat and Jihad El-Sana.

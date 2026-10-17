@@ -1,0 +1,3 @@
+/* The UI is Hebrew; this table only localizes the camera permission prompt for English devices. */
+"CFBundleDisplayName" = "משקפת";
+"NSCameraUsageDescription" = "Mishkefet uses the camera to photograph handwriting and read it. Photos and readings stay on this device.";
