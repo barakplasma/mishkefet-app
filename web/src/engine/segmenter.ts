@@ -5,18 +5,20 @@
  * Every threshold scales with the measured pitch.
  *
  * Binary masks are uint8 with ink = 255. Boxes come out in the deskewed
- * page's pixel grid at full resolution; `toOriginal` maps them back onto the
- * photo the user sees.
+ * page's pixel grid at full resolution, and the deskewed page (on an
+ * expanded canvas beyond 6 degrees) is returned with them: it is what gets
+ * stored and shown, and what line crops are cut from.
  */
 
 import {
   blurLarge,
   convolveSep,
-  crop,
-  cropRotated,
-  cropRotatedRgb,
+  cropRgb,
+  expandedSize,
   gaussianKernel,
   resize,
+  rgbToGray,
+  rotateRgb,
   roundHalfEven,
   roundU8,
   type Gray,
@@ -39,8 +41,10 @@ export interface Segmentation {
   pitch: number
   /** Working resolution / full resolution. */
   scale: number
-  /** Line boxes in reading order, deskewed full-resolution coordinates. */
+  /** Line boxes in reading order, in `deskewed` coordinates. */
   boxes: Box[]
+  /** The deskewed page (the input itself when no rotation was needed). */
+  deskewed: Rgb
 }
 
 // ---------------------------------------------------------------- binarize
@@ -119,6 +123,98 @@ function rotatedRowSums(m: Mask, angle: number): Float64Array {
   return prof
 }
 
+/**
+ * Nearest-neighbour rotation onto the expanded canvas, centre to centre:
+ * destination (x, y) samples (c X - s Y + w/2, s X + c Y + h/2) rounded,
+ * with X = x - W'/2, Y = y - H'/2; 0 outside.
+ */
+export function rotateNearestExpand(m: Mask, angle: number): Mask {
+  const { width: w, height: h, data } = m
+  const { width: W, height: H } = expandedSize(w, h, angle)
+  const a = angle * (Math.PI / 180)
+  const c = Math.cos(a)
+  const s = Math.sin(a)
+  const out = new Uint8Array(W * H)
+  for (let y = 0; y < H; y++) {
+    const dy = y - H / 2
+    for (let x = 0; x < W; x++) {
+      const dx = x - W / 2
+      const sx = Math.floor(c * dx - s * dy + w / 2 + 0.5)
+      const sy = Math.floor(s * dx + c * dy + h / 2 + 0.5)
+      if (sx >= 0 && sx < w && sy >= 0 && sy < h) out[y * W + x] = data[sy * w + sx]
+    }
+  }
+  return { data: out, width: W, height: H }
+}
+
+/** Population variance of the first differences of `prof`. */
+function diffVariance(prof: Float64Array): number {
+  const m = prof.length - 1
+  if (m <= 0) return NaN
+  let mean = 0
+  for (let j = 0; j < m; j++) mean += prof[j + 1] - prof[j]
+  mean /= m
+  let v = 0
+  for (let j = 0; j < m; j++) {
+    const d = prof[j + 1] - prof[j] - mean
+    v += d * d
+  }
+  return v / m
+}
+
+/** Row-profile sharpness at `angle`, per unit width (comparable across orientations). */
+export function stripeScore(small: Mask, angle: number): number {
+  const prof = rotatedRowSums(small, angle)
+  const norm = 255 * small.width
+  for (let i = 0; i < prof.length; i++) prof[i] /= norm
+  return diffVariance(prof)
+}
+
+const WIDE_LIMIT = 44
+
+/**
+ * (angle, stripe score): a coarse search over +-44 degrees (step 2) at
+ * quarter resolution; within +-6 the original fine search decides (ordinary
+ * pages deskew exactly as before), beyond it a 0.5-degree search around the
+ * coarse answer at half resolution. A page where every angle scores the same
+ * (no ink) stays level. The score is used to tell sideways pages.
+ */
+export function estimateSkewWide(binary: Mask): { angle: number; score: number } {
+  const { width: w, height: h } = binary
+  const q = resize(binary, Math.max(1, roundHalfEven(w / 4)), Math.max(1, roundHalfEven(h / 4)), 'area', 4, 4)
+  let coarse = 0
+  let best = -1
+  let worst = Infinity
+  for (let i = 0; i <= WIDE_LIMIT; i++) {
+    const a = -WIDE_LIMIT + 2 * i
+    const sc = stripeScore(q, a)
+    if (sc < worst) worst = sc // Python's min(worst, sc)
+    if (sc > best) {
+      coarse = a
+      best = sc
+    }
+  }
+  const half = resize(binary, roundHalfEven(w * 0.5), roundHalfEven(h * 0.5), 'area', 2, 2)
+  // every angle scores the same (a page without ink): leave it level
+  if (best <= worst) return { angle: 0, score: stripeScore(half, 0) }
+  let angle: number
+  if (Math.abs(coarse) <= 6) {
+    angle = estimateSkew(binary)
+  } else {
+    angle = coarse - 2
+    best = -1
+    for (let i = 0; i < 9; i++) {
+      const a = coarse - 2 + 0.5 * i
+      const sc = stripeScore(half, a)
+      if (sc > best) {
+        angle = a
+        best = sc
+      }
+    }
+  }
+  return { angle, score: stripeScore(half, angle) }
+}
+
 /** The angle in -6..6 (step 0.5) whose row profile has the sharpest transitions. */
 export function estimateSkew(binary: Mask, limit = 6, step = 0.5): number {
   const small = resize(binary, roundHalfEven(binary.width * 0.5), roundHalfEven(binary.height * 0.5), 'area', 2, 2)
@@ -127,19 +223,7 @@ export function estimateSkew(binary: Mask, limit = 6, step = 0.5): number {
   const n = Math.round((2 * limit) / step)
   for (let i = 0; i <= n; i++) {
     const angle = -limit + i * step
-    const prof = rotatedRowSums(small, angle)
-    const m = prof.length - 1
-    let score = 0
-    if (m > 0) {
-      let mean = 0
-      for (let j = 0; j < m; j++) mean += prof[j + 1] - prof[j]
-      mean /= m
-      for (let j = 0; j < m; j++) {
-        const d = prof[j + 1] - prof[j] - mean
-        score += d * d
-      }
-      score /= m
-    } else score = NaN
+    const score = diffVariance(rotatedRowSums(small, angle))
     if (score > best) {
       bestAngle = angle
       best = score
@@ -233,8 +317,8 @@ interface Component {
   area: number
 }
 
-/** 8-connected components of non-zero pixels, numbered in raster order of first pixel. */
-export function components(a: Uint8Array, w: number, h: number): Component[] {
+/** Connected components (8- or 4-connected) of non-zero pixels, in raster order of first pixel. */
+export function components(a: Uint8Array, w: number, h: number, connectivity: 4 | 8 = 8): Component[] {
   const seen = new Uint8Array(w * h)
   const stack = new Int32Array(w * h)
   const out: Component[] = []
@@ -262,7 +346,7 @@ export function components(a: Uint8Array, w: number, h: number): Component[] {
         if (ny < 0 || ny >= h) continue
         for (let dx = -1; dx <= 1; dx++) {
           const nx = x + dx
-          if (nx < 0 || nx >= w) continue
+          if (nx < 0 || nx >= w || (connectivity === 4 && dx && dy)) continue
           const q = ny * w + nx
           if (a[q] && !seen[q]) {
             seen[q] = 1
@@ -288,7 +372,9 @@ export function findLines(binary: Mask, pitch: number): Box[] {
   const boxes: Box[] = []
   for (const c of components(sm, w, h)) {
     const b = c.box
-    if (b.w < pitch * 0.8 || b.h < pitch * 0.25 || b.h > pitch * 12 || c.area < pitch * pitch * 0.12) continue
+    if (b.w < pitch * 0.8 || b.h < pitch * 0.25 || c.area < pitch * pitch * 0.12) continue
+    // tall and mostly empty is a box outline; tall and dense is a paragraph that smeared together (spec/segmenter.md)
+    if (b.h > pitch * 12 && c.area / (b.w * b.h) < 0.35) continue
     boxes.push(b)
   }
   return boxes
@@ -398,18 +484,30 @@ export function readingOrder(boxes: Box[], pitch: number): Box[] {
 
 // ---------------------------------------------------------------- page
 
-export interface SegmentHooks {
+export interface SegmentOptions {
   /** Checked between stages; throw from it to abort. */
   checkpoint?: () => void
+  maxSide?: number
+  /** binarize(gray of this page), when the caller already has it. */
+  binarized?: { binary: Mask; scale: number }
 }
 
-export function segmentPage(gray: Gray, hooks: SegmentHooks = {}, maxSide = 2000): Segmentation {
-  const cp = hooks.checkpoint ?? (() => {})
-  const { binary: b0, scale } = binarize(gray, maxSide)
+/** Page (RGB) to line boxes, plus the deskewed page they refer to. */
+export function segmentPage(rgb: Rgb, opts: SegmentOptions = {}): Segmentation {
+  const cp = opts.checkpoint ?? (() => {})
+  const { binary: b0, scale } = opts.binarized ?? binarize(rgbToGray(rgb), opts.maxSide ?? 2000)
   cp()
   let binary = b0
-  const angle = estimateSkew(binary)
-  if (Math.abs(angle) > 1e-3) binary = rotateNearest(binary, angle)
+  const { angle } = estimateSkewWide(binary)
+  let deskewed = rgb
+  if (Math.abs(angle) > 6) {
+    // a strongly tilted photo: a canvas big enough to keep the corners
+    binary = rotateNearestExpand(binary, angle)
+    deskewed = rotateRgb(rgb, angle, true)
+  } else if (Math.abs(angle) > 1e-3) {
+    binary = rotateNearest(binary, angle)
+    deskewed = rotateRgb(rgb, angle)
+  }
   cp()
   let pitch = estimateLinePitch(binary)
   binary = removeRules(binary, pitch)
@@ -426,65 +524,26 @@ export function segmentPage(gray: Gray, hooks: SegmentHooks = {}, maxSide = 2000
     w: Math.trunc(b.w * inv),
     h: Math.trunc(b.h * inv),
   }))
-  return { angle, pitch, scale, boxes: full }
+  return { angle, pitch, scale, boxes: full, deskewed }
 }
 
 /** The padded crop rectangle of a line box, clamped to the page. */
 export function cropRect(b: Box, width: number, height: number): Rect {
   const py = Math.trunc(b.h * 0.12)
   const px = Math.trunc(b.h * 0.05)
-  const x0 = Math.max(b.x - px, 0)
-  const y0 = Math.max(b.y - py, 0)
+  const x0 = Math.min(Math.max(b.x - px, 0), width - 1)
+  const y0 = Math.min(Math.max(b.y - py, 0), height - 1)
   const x1 = Math.min(b.x + b.w + px, width)
   const y1 = Math.min(b.y + b.h + py, height)
   return { x: x0, y: y0, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) }
 }
 
-/**
- * The gray crop of line box `b` from the deskewed page. With the page's RGB,
- * the channels are rotated before the gray conversion (what the reference
- * does; rotating the gray page instead differs by a level here and there,
- * which is enough to change some reads of faint lines).
- */
-export function lineCrop(gray: Gray, angle: number, b: Box, rgb?: Rgb): Gray {
-  const r = cropRect(b, gray.width, gray.height)
-  if (Math.abs(angle) <= 1e-3) return crop(gray, r)
-  return rgb ? cropRotatedRgb(rgb, angle, r) : cropRotated(gray, angle, r)
+/** The padded RGB crop of line box `b` from the (deskewed) page. */
+export function lineCropRgb(page: Rgb, b: Box): Rgb {
+  return cropRgb(page, cropRect(b, page.width, page.height))
 }
 
-/**
- * A deskewed-page box mapped back onto the original image: its corners rotated
- * back about the page centre, then the axis-aligned bound, clamped.
- */
-export function toOriginal(b: Box, angle: number, width: number, height: number): Box {
-  if (Math.abs(angle) <= 1e-3) return { ...b }
-  const a = angle * (Math.PI / 180)
-  const c = Math.cos(a)
-  const s = Math.sin(a)
-  const cx = width / 2
-  const cy = height / 2
-  let x0 = Infinity
-  let y0 = Infinity
-  let x1 = -Infinity
-  let y1 = -Infinity
-  for (const [px, py] of [
-    [b.x, b.y],
-    [b.x + b.w, b.y],
-    [b.x, b.y + b.h],
-    [b.x + b.w, b.y + b.h],
-  ]) {
-    const X = px - cx
-    const Y = py - cy
-    const ox = c * X - s * Y + cx
-    const oy = s * X + c * Y + cy
-    x0 = Math.min(x0, ox)
-    x1 = Math.max(x1, ox)
-    y0 = Math.min(y0, oy)
-    y1 = Math.max(y1, oy)
-  }
-  const fx0 = Math.max(0, Math.floor(x0))
-  const fy0 = Math.max(0, Math.floor(y0))
-  const fx1 = Math.min(width, Math.ceil(x1))
-  const fy1 = Math.min(height, Math.ceil(y1))
-  return { x: fx0, y: fy0, w: Math.max(0, fx1 - fx0), h: Math.max(0, fy1 - fy0) }
+/** The padded gray crop of line box `b`: crop the RGB, then convert, as the reference does. */
+export function lineCrop(page: Rgb, b: Box): Gray {
+  return rgbToGray(lineCropRgb(page, b))
 }

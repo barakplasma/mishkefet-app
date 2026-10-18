@@ -1,0 +1,197 @@
+[
+ {
+  "file": "lines/p1-01.png",
+  "in": [
+   632,
+   120
+  ],
+  "out": [
+   632,
+   120
+  ],
+  "changed": false,
+  "sum": 13984559
+ },
+ {
+  "file": "lines/p1-02.png",
+  "in": [
+   540,
+   84
+  ],
+  "out": [
+   540,
+   62
+  ],
+  "changed": true,
+  "sum": 5413603
+ },
+ {
+  "file": "lines/p1-03.png",
+  "in": [
+   1730,
+   109
+  ],
+  "out": [
+   1730,
+   71
+  ],
+  "changed": true,
+  "sum": 20602802
+ },
+ {
+  "file": "lines/p1-04.png",
+  "in": [
+   1715,
+   114
+  ],
+  "out": [
+   1715,
+   51
+  ],
+  "changed": true,
+  "sum": 14227598
+ },
+ {
+  "file": "lines/p1-05.png",
+  "in": [
+   1741,
+   98
+  ],
+  "out": [
+   1741,
+   58
+  ],
+  "changed": true,
+  "sum": 16862829
+ },
+ {
+  "file": "lines/p1-06.png",
+  "in": [
+   1352,
+   120
+  ],
+  "out": [
+   1352,
+   53
+  ],
+  "changed": true,
+  "sum": 12302588
+ },
+ {
+  "file": "lines/p2-01.png",
+  "in": [
+   1409,
+   115
+  ],
+  "out": [
+   1409,
+   115
+  ],
+  "changed": false,
+  "sum": 27536282
+ },
+ {
+  "file": "lines/p2-02.png",
+  "in": [
+   1393,
+   96
+  ],
+  "out": [
+   1393,
+   54
+  ],
+  "changed": true,
+  "sum": 11712859
+ },
+ {
+  "file": "lines/p2-03.png",
+  "in": [
+   1383,
+   104
+  ],
+  "out": [
+   1383,
+   60
+  ],
+  "changed": true,
+  "sum": 13198021
+ },
+ {
+  "file": "lines/p2-04.png",
+  "in": [
+   1390,
+   111
+  ],
+  "out": [
+   1390,
+   69
+  ],
+  "changed": true,
+  "sum": 15242590
+ },
+ {
+  "file": "lines/p2-05.png",
+  "in": [
+   981,
+   120
+  ],
+  "out": [
+   981,
+   58
+  ],
+  "changed": true,
+  "sum": 9599450
+ },
+ {
+  "file": "lines/p2-06.png",
+  "in": [
+   931,
+   120
+  ],
+  "out": [
+   931,
+   120
+  ],
+  "changed": false,
+  "sum": 19294080
+ },
+ {
+  "file": "lines/curved-1.png",
+  "in": [
+   654,
+   288
+  ],
+  "out": [
+   654,
+   220
+  ],
+  "changed": true,
+  "sum": 31319666
+ },
+ {
+  "file": "lines/curved-2.png",
+  "in": [
+   556,
+   236
+  ],
+  "out": [
+   556,
+   120
+  ],
+  "changed": true,
+  "sum": 12903384
+ },
+ {
+  "file": "lines/curved-3.png",
+  "in": [
+   1738,
+   311
+  ],
+  "out": [
+   1738,
+   138
+  ],
+  "changed": true,
+  "sum": 45947101
+ }
+]

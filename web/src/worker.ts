@@ -18,12 +18,12 @@ import type { Backend, HeadData, Reply, Request, TrainView } from './engine/api.
 import { parseCharset, textToLabels } from './engine/charset.ts'
 import { FEATURE_DIM } from './engine/constants.ts'
 import { applyHead, parseHead } from './engine/head.ts'
-import { rgbaToGray } from './engine/image.ts'
+import { rgbaToGray, rgbToRgba } from './engine/image.ts'
 import { parseCharLM, parseWordLM } from './engine/lm.ts'
 import { createOrtMatMul, matmulModel, type MatMul } from './engine/matmul.ts'
 import { characterAccuracy } from './engine/metrics.ts'
 import { createBackbone } from './engine/model.ts'
-import { CancelledError, decode, grayFeatures, readLine, readPage, readStrokes, renderWord, type Engine } from './engine/reader.ts'
+import { CancelledError, decode, grayFeatures, readBoxes, readLine, readPage, readStrokes, renderWord, type Engine } from './engine/reader.ts'
 import { loadModelFiles } from './engine/store.ts'
 import { createTrainer } from './engine/trainer.ts'
 
@@ -213,12 +213,33 @@ async function handle(req: Request): Promise<void> {
         req,
         { tta: req.tta, head: checkHead(req.head, engine) },
         {
-          onSegmented: (s, boxes) => post({ id, type: 'segmented', angle: s.angle, boxes, width: req.width, height: req.height }),
+          onSegmented: ({ paper, turns, seg: s }) => {
+            const image = { rgba: rgbToRgba(s.deskewed), width: s.deskewed.width, height: s.deskewed.height }
+            post(
+              { id, type: 'segmented', angle: s.angle, turns, paper: paper ?? undefined, boxes: s.boxes, width: image.width, height: image.height, image },
+              [image.rgba.buffer as ArrayBuffer],
+            )
+          },
           onLine: (index, total, result) => post({ id, type: 'line', index, total, result }),
           shouldStop: () => cancelled.has(id),
         },
       )
       post({ id, type: 'done', lines, angle: seg.angle })
+      return
+    }
+    case 'readBoxes': {
+      checkImage(req)
+      const lines = await readBoxes(
+        engine,
+        req,
+        req.boxes,
+        { tta: req.tta, head: checkHead(req.head, engine) },
+        {
+          onLine: (index, total, result) => post({ id, type: 'line', index, total, result }),
+          shouldStop: () => cancelled.has(id),
+        },
+      )
+      post({ id, type: 'done', lines })
       return
     }
     case 'readStrokes': {

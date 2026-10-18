@@ -8,6 +8,9 @@ export type LineBox = { x: number; y: number; w: number; h: number }
 
 export type LineResult = { text: string; confidence: number; box?: LineBox }
 
+/** An RGBA image (canvas ImageData layout). */
+export type RgbaImage = { rgba: Uint8ClampedArray; width: number; height: number }
+
 /** Strokes from the training canvas, in CSS pixels, y down. */
 export type Stroke = Array<[number, number]>
 
@@ -24,8 +27,18 @@ export type Request =
   | { id: number; type: 'load'; baseUrl?: string; forceWasm?: boolean }
   /** Read a single line crop (RGBA from a canvas). */
   | { id: number; type: 'readLine'; rgba: Uint8ClampedArray; width: number; height: number; head?: HeadData; tta: number }
-  /** Segment and read a page. Emits 'segmented' then one 'line' per line, then 'done'. */
+  /**
+   * Crop to the paper, turn upright, deskew, segment and read a page. Emits
+   * 'segmented' (with the upright deskewed page the boxes refer to), then one
+   * 'line' per box, then 'done' with every line (blank texts included).
+   */
   | { id: number; type: 'readPage'; rgba: Uint8ClampedArray; width: number; height: number; head?: HeadData; tta: number }
+  /**
+   * Re-read boxes of an already deskewed page (the 'segmented' image): each box
+   * is cropped with the segmenter's padding, straightened and read. Emits one
+   * 'line' per box, then 'done' with one result per box, in the same order.
+   */
+  | { id: number; type: 'readBoxes'; rgba: Uint8ClampedArray; width: number; height: number; boxes: LineBox[]; head?: HeadData; tta: number }
   /** Training check: render strokes, read with beam (tta 1). */
   | { id: number; type: 'readStrokes'; strokes: Stroke[]; word: string; head?: HeadData }
   /** Render the sample's views and return backbone features for each. */
@@ -43,7 +56,13 @@ export type Reply =
   | { id: number; type: 'progress'; loaded: number; total: number }
   | { id: number; type: 'ready'; backend: Backend; baseHead: HeadData; ortFiles: string[] }
   | { id: number; type: 'line'; index: number; total: number; result: LineResult }
-  | { id: number; type: 'segmented'; angle: number; boxes: LineBox[]; width: number; height: number }
+  /**
+   * `image` is the upright, deskewed (possibly paper-cropped and expanded)
+   * page; `boxes`, `width` and `height` are in its frame. `turns` is the
+   * quarter turns counter-clockwise applied, `paper` the crop rectangle in the
+   * original image when it was cropped, `angle` the deskew in degrees.
+   */
+  | { id: number; type: 'segmented'; angle: number; turns: number; paper?: LineBox; boxes: LineBox[]; width: number; height: number; image: RgbaImage }
   | { id: number; type: 'done'; lines: LineResult[]; angle?: number }
   | { id: number; type: 'text'; text: string }
   | { id: number; type: 'features'; views: TrainView[]; preview?: { gray: Uint8Array; width: number; height: number } }

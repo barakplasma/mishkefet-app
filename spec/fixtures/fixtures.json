@@ -13,6 +13,14 @@
       "file": "pages/big-lines.png",
       "source": "rendered for this repo",
       "lines": 5
+    },
+    {
+      "file": "pages/turned-tilted.jpg",
+      "source": "page2.jpg turned 270 and tilted 20 degrees"
+    },
+    {
+      "file": "pages/screenshot.png",
+      "source": "big-lines.png inside rendered app chrome"
     }
   ],
   "lines": [
@@ -63,6 +71,29 @@
     {
       "file": "lines/p2-06.png",
       "truth": "נא' הקט' יוסף בלא\"א כהר\"ר מרדכי זללה\"ה טריוש כותב וחותם בפקודת החבורא קדישא יצו יום הנ\"ל"
+    }
+  ],
+  "curved": [
+    {
+      "file": "lines/curved-1.png",
+      "truth": "ע\"פ החבורא קדישא יצ\"ו בהסכמת אלופי קריאי עדה נמנו וגמרו שכן יהיה וכן יקום הנהגת הרופאי'",
+      "source": "lines/p1-01.png",
+      "angle": 8.0,
+      "bend": 0.3
+    },
+    {
+      "file": "lines/curved-2.png",
+      "truth": "כמ' אברהם ווערטום וכמ' זלמן רופ'",
+      "source": "lines/p1-02.png",
+      "angle": -11.0,
+      "bend": -0.25
+    },
+    {
+      "file": "lines/curved-3.png",
+      "truth": "וזה יצא ראשונה זאל קיינר חוץ לקהלתינו ציהן לעתקיו בלתי רצון ורשות שני גבאי קהל והגבאי' יתייעצו עוד עם פרנס",
+      "source": "lines/p1-03.png",
+      "angle": 5.0,
+      "bend": 0.2
     }
   ]
 }

@@ -215,6 +215,80 @@ def preprocess(gray: np.ndarray) -> np.ndarray:
     return (1.0 - g.astype(np.float32) / np.float32(255.0)).astype(np.float32)
 
 
+# --------------------------------------------------------------------------
+# Line straightening (spec/straighten.md)
+# --------------------------------------------------------------------------
+
+STRAIGHTEN_MIN_DEV = 0.15   # fraction of the crop height the centreline must wander to act
+STRAIGHTEN_BAND = 2.5       # keep rows within this many ink standard deviations of the line
+
+
+def line_centerline(gray: np.ndarray):
+    """(f, sigma): a weighted quadratic through the ink's vertical centre per column,
+    refitted twice without columns far from it (pieces of neighbouring lines);
+    sigma is the ink's spread around it. None when there is too little ink."""
+    h, w = gray.shape
+    flat = contrast_normalize(gray)
+    # ink weight: how far below the crop's own Otsu split a pixel is (textured or
+    # grey paper must weigh nothing, or the centreline drifts to the crop's middle)
+    t = float(otsu_threshold(flat))
+    wt = np.clip((t - flat.astype(np.float64)) / max(t, 1.0), 0.0, 1.0)
+    col = wt.sum(axis=0)
+    ys = np.arange(h, dtype=np.float64)
+    keep = col > 0.5
+    if keep.sum() < max(8, w * 0.15):
+        return None
+    xs = np.arange(w, dtype=np.float64)[keep]
+    m = (wt * ys[:, None]).sum(axis=0)[keep] / col[keep]
+    wk = col[keep]
+    coef = None
+    for _ in range(2):
+        coef = np.polyfit(xs, m, 2, w=np.sqrt(wk))
+        res = m - np.polyval(coef, xs)
+        rms = math.sqrt(float(np.average(res * res, weights=wk)))
+        good = np.abs(res) < max(0.18 * h, 2.5 * rms + 1.0)
+        if good.all():
+            break
+        xs, m, wk = xs[good], m[good], wk[good]
+        if len(xs) < 8:
+            return None
+    f = np.polyval(coef, np.arange(w, dtype=np.float64))
+    dy = ys[:, None] - f[None, :]
+    sigma = math.sqrt(float((wt * dy * dy).sum() / max(float(wt.sum()), 1e-6)))
+    return f, sigma
+
+
+def straighten_line(gray: np.ndarray) -> np.ndarray:
+    """Flatten a tilted or curved line: shift every column so the ink's centreline
+    is level, then keep only a band around it (neighbouring lines' ink is cut away).
+    A line whose centreline wanders less than STRAIGHTEN_MIN_DEV of the height is
+    returned unchanged."""
+    h, w = gray.shape
+    fit = line_centerline(gray)
+    if fit is None:
+        return gray
+    f, sigma = fit
+    dev = f - f.mean()
+    if np.abs(dev).max() < STRAIGHTEN_MIN_DEV * h:
+        return gray
+    pad = int(math.ceil(float(np.abs(dev).max())))
+    H = h + 2 * pad
+    out = np.full((H, w), 255.0)
+    ys = np.arange(H, dtype=np.float64)
+    for x in range(w):
+        src = ys - pad + dev[x]
+        ok = (src >= 0) & (src <= h - 1)
+        s_ = src[ok]
+        i0 = np.floor(s_).astype(np.int64)
+        i1 = np.minimum(i0 + 1, h - 1)
+        a = s_ - i0
+        out[ok, x] = gray[i0, x] * (1 - a) + gray[i1, x] * a
+    c = float(f.mean()) + pad
+    band = max(STRAIGHTEN_BAND * sigma, 0.22 * h)
+    top, bot = int(max(0.0, c - band)), int(min(float(H), c + band + 1))
+    return round_u8(out[top:bot])
+
+
 def tta_view(gray: np.ndarray, scale: float) -> np.ndarray:
     if scale == 1.0:
         return gray
@@ -487,7 +561,9 @@ class Reader:
         return self.text(labels), lp
 
     def read_line(self, gray: np.ndarray, head=None) -> dict:
-        """Best of the TTA views by emitting-frame confidence (hebocr read_tta)."""
+        """Best of the TTA views by emitting-frame confidence (hebocr read_tta),
+        after straightening a tilted or curved line."""
+        gray = straighten_line(gray)
         best_text, best_score, base_lp = "", NEG_INF, None
         for scale in TTA_SCALES[: max(1, self.tta)]:
             text, lp = self.read_view(tta_view(gray, scale), head)
@@ -501,12 +577,18 @@ class Reader:
         return {"text": best_text, "confidence": confidence(base_lp, False)}
 
     def read_page(self, rgb: np.ndarray, head=None) -> dict:
-        seg = segment_page(rgb)
+        """Crop to the paper (screenshots), turn it upright, segment, read every
+        line. Boxes are in the upright page's deskewed frame (`seg["deskewed"]`)."""
+        paper = find_paper(rgb)
+        if paper:
+            x, y, w, h = paper
+            rgb = np.ascontiguousarray(rgb[y: y + h, x: x + w])
+        turns, seg = orient_page(rgb, self.model)
         lines = []
         for crop, box in zip(seg["crops"], seg["boxes"]):
             r = self.read_line(to_gray(crop), head)
             lines.append({**r, "box": box})
-        return {"angle": seg["angle"], "lines": lines}
+        return {"paper": paper, "turns": turns, "angle": seg["angle"], "lines": lines, "deskewed": seg["deskewed"]}
 
 
 # --------------------------------------------------------------------------
@@ -674,6 +756,73 @@ def rotate_nearest(img: np.ndarray, angle: float, fill=0) -> np.ndarray:
     return out
 
 
+def expanded_size(w: int, h: int, angle: float) -> tuple[int, int]:
+    """Canvas that holds the whole page rotated by `angle` (PIL's expand=True rule)."""
+    a = math.radians(angle)
+    c, s_ = math.cos(a), math.sin(a)
+    xs, ys = [], []
+    for x, y in ((0, 0), (w, 0), (w, h), (0, h)):
+        dx, dy = x - w / 2, y - h / 2
+        xs.append(c * dx + s_ * dy)
+        ys.append(-s_ * dx + c * dy)
+    return math.ceil(max(xs)) - math.floor(min(xs)), math.ceil(max(ys)) - math.floor(min(ys))
+
+
+def rotate_nearest_expand(img: np.ndarray, angle: float, fill=0) -> np.ndarray:
+    """Nearest-neighbour rotation onto the expanded canvas, centre to centre."""
+    h, w = img.shape
+    W, H = expanded_size(w, h, angle)
+    a = math.radians(angle)
+    c, s_ = math.cos(a), math.sin(a)
+    ys, xs = np.mgrid[0:H, 0:W]
+    dx, dy = xs - W / 2, ys - H / 2
+    # inverse of [[c, s], [-s, c]] is [[c, -s], [s, c]]
+    sx = np.floor(c * dx - s_ * dy + w / 2 + 0.5).astype(np.int64)
+    sy = np.floor(s_ * dx + c * dy + h / 2 + 0.5).astype(np.int64)
+    ok = (sx >= 0) & (sx < w) & (sy >= 0) & (sy < h)
+    out = np.full((H, W), fill, dtype=img.dtype)
+    out[ok] = img[sy[ok], sx[ok]]
+    return out
+
+
+def stripe_score(small: np.ndarray, angle: float) -> float:
+    """Row-profile sharpness at `angle`, per unit width (comparable across orientations)."""
+    prof = rotate_nearest(small, angle).sum(axis=1, dtype=np.float64) / (255.0 * small.shape[1])
+    return float(np.var(np.diff(prof)))
+
+
+WIDE_LIMIT = 44
+
+
+def estimate_skew_wide(binary: np.ndarray) -> tuple[float, float]:
+    """(angle, stripe score). A coarse search over +-44 degrees at quarter resolution;
+    within +-6 the original fine search decides (so ordinary pages are unchanged),
+    beyond it a 0.5-degree search around the coarse answer."""
+    h, w = binary.shape
+    q = resize(binary, max(1, int(round(w / 4))), max(1, int(round(h / 4))), "area", sx=4.0, sy=4.0)
+    best_c, best, worst = 0, -1.0, float("inf")
+    for i in range(WIDE_LIMIT + 1):
+        a = -WIDE_LIMIT + 2 * i
+        sc = stripe_score(q, a)
+        worst = min(worst, sc)
+        if sc > best:
+            best_c, best = a, sc
+    half = resize(binary, int(round(w * 0.5)), int(round(h * 0.5)), "area", sx=2.0, sy=2.0)
+    if best <= worst:
+        # every angle scores the same (a page without ink): leave it level
+        return 0.0, stripe_score(half, 0.0)
+    if abs(best_c) <= 6:
+        angle = estimate_skew(binary)
+    else:
+        angle, best = best_c - 2.0, -1.0
+        for i in range(9):
+            a = best_c - 2 + 0.5 * i
+            sc = stripe_score(half, a)
+            if sc > best:
+                angle, best = a, sc
+    return angle, stripe_score(half, angle)
+
+
 def estimate_skew(binary: np.ndarray, limit=6.0, step=0.5) -> float:
     h, w = binary.shape
     sw, sh = int(round(w * 0.5)), int(round(h * 0.5))
@@ -744,7 +893,14 @@ def find_lines(binary: np.ndarray, pitch: float) -> list[Box]:
     for i, sl in enumerate(ndimage.find_objects(labels), start=1):
         y, x = sl[0].start, sl[1].start
         h, w = sl[0].stop - y, sl[1].stop - x
-        if w < pitch * 0.8 or h < pitch * 0.25 or h > pitch * 12.0 or areas[i] < pitch * pitch * 0.12:
+        if w < pitch * 0.8 or h < pitch * 0.25 or areas[i] < pitch * pitch * 0.12:
+            continue
+        # hebocr dropped every component taller than 12 pitches as a box
+        # outline. On dense notes (graph paper, close lines) whole paragraphs
+        # smear into one tall component and vanished with it, so only drop
+        # tall components that are mostly empty, which outlines are; dense
+        # ones go on to split_tall. Same result on all 10 benchmark pages.
+        if h > pitch * 12.0 and areas[i] / (w * h) < 0.35:
             continue
         boxes.append(Box(int(x), int(y), int(w), int(h)))
     return boxes
@@ -811,7 +967,7 @@ def reading_order(boxes: list[Box], pitch: float) -> list[Box]:
     return [b for row in rows for b in sorted(row, key=lambda b: -(b.x + b.w))]
 
 
-def rotate_rgb(rgb: np.ndarray, angle: float) -> np.ndarray:
+def rotate_rgb(rgb: np.ndarray, angle: float, expand: bool = False) -> np.ndarray:
     """Rotate about the centre with bicubic sampling, white outside.
 
     The apps use their platform's bicubic/bilinear rotation; crops only feed
@@ -819,6 +975,13 @@ def rotate_rgb(rgb: np.ndarray, angle: float) -> np.ndarray:
     from PIL import Image
 
     im = Image.fromarray(rgb)
+    if expand:
+        # same canvas as rotate_nearest_expand, scaled to this image
+        W, H = expanded_size(im.width, im.height, angle)
+        out = im.rotate(angle, resample=Image.BICUBIC, expand=True, fillcolor=(255, 255, 255))
+        if out.size != (W, H):
+            out = out.crop(((out.width - W) // 2, (out.height - H) // 2, (out.width - W) // 2 + W, (out.height - H) // 2 + H))
+        return np.asarray(out)
     return np.asarray(im.rotate(angle, resample=Image.BICUBIC, fillcolor=(255, 255, 255)))
 
 
@@ -833,8 +996,12 @@ def segment_page(rgb: np.ndarray, max_side=2000) -> dict:
     if rgb.ndim == 2:
         rgb = np.stack([rgb] * 3, axis=-1)
     binary, scale = binarize(to_gray(rgb), max_side)
-    angle = estimate_skew(binary)
-    if abs(angle) > 1e-3:
+    angle, _ = estimate_skew_wide(binary)
+    if abs(angle) > 6:
+        # a strongly tilted photo: rotate onto a canvas big enough to keep the corners
+        binary = rotate_nearest_expand(binary, angle)
+        work = rotate_rgb(rgb, angle, expand=True)
+    elif abs(angle) > 1e-3:
         binary = rotate_nearest(binary, angle)
         work = rotate_rgb(rgb, angle)
     else:
@@ -853,7 +1020,127 @@ def segment_page(rgb: np.ndarray, max_side=2000) -> dict:
         "pitch": pitch,
         "boxes": [{"x": b.x, "y": b.y, "w": b.w, "h": b.h} for b in full],
         "crops": [crop_box(work, b) for b in full],
+        "deskewed": work,
     }
+
+
+# --------------------------------------------------------------------------
+# Orientation: sideways or upside-down photos (spec/orientation.md)
+# --------------------------------------------------------------------------
+
+def otsu_threshold(values: np.ndarray) -> int:
+    """Otsu's threshold over uint8 values (first maximum of the between-class variance)."""
+    hist = np.bincount(values.ravel(), minlength=256).astype(np.float64)
+    p = hist / max(hist.sum(), 1.0)
+    omega = np.cumsum(p)
+    mu = np.cumsum(p * np.arange(256))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        sb = (mu[-1] * omega - mu) ** 2 / (omega * (1 - omega))
+    return int(np.argmax(np.nan_to_num(sb)))
+
+
+def find_paper(rgb: np.ndarray, work: int = 256):
+    """(x, y, w, h) of the paper when it sits inside near-black surroundings (a
+    screenshot's app bars, a photo on a black screen), else None.
+
+    At 256 px: Otsu-split brightness, close gaps (ink, ruling) with a square of
+    3% of the short side, open with 3x3, keep the largest bright component. Crop
+    only when that component is at least 20% of the image, its box is under 92%
+    of it, and everything outside the box averages below 25 and covers at least a
+    quarter of the image. The crop sits 1.5% inside the box, so no strip of the
+    dark surround survives to look like a ruled edge."""
+    from scipy import ndimage
+
+    g = to_gray(rgb)
+    H, W = g.shape
+    s = work / max(H, W)
+    w, h = max(1, int(round(W * s))), max(1, int(round(H * s)))
+    small = resize(g, w, h, "area", sx=W / w, sy=H / h)
+    bright = small > otsu_threshold(small)
+    k = max(3, int(round(min(w, h) * 0.03))) | 1
+    bright = ndimage.binary_closing(bright, structure=np.ones((k, k)), border_value=0)
+    bright = ndimage.binary_opening(bright, structure=np.ones((3, 3)))
+    lab, n = ndimage.label(bright)
+    if n == 0:
+        return None
+    sizes = np.bincount(lab.ravel())
+    sizes[0] = 0
+    i = int(np.argmax(sizes))
+    if sizes[i] < 0.2 * w * h:
+        return None
+    sl = ndimage.find_objects(lab)[i - 1]
+    y0, y1, x0, x1 = sl[0].start, sl[0].stop, sl[1].start, sl[1].stop
+    if (y1 - y0) * (x1 - x0) > 0.92 * w * h:
+        return None
+    outside = np.ones(small.shape, bool)
+    outside[y0:y1, x0:x1] = False
+    if float(small[outside].mean()) > 25 or float(outside.mean()) < 0.25:
+        return None
+    m = 0.015
+    X0, Y0 = max(0, int((x0 / w + m) * W)), max(0, int((y0 / h + m) * H))
+    X1, Y1 = min(W, int((x1 / w - m) * W)), min(H, int((y1 / h - m) * H))
+    if X1 - X0 < 16 or Y1 - Y0 < 16:
+        return None
+    return X0, Y0, X1 - X0, Y1 - Y0
+
+
+def rot90(img: np.ndarray, k: int) -> np.ndarray:
+    """k quarter turns counter-clockwise (as displayed)."""
+    return np.ascontiguousarray(np.rot90(img, k % 4))
+
+
+VOTE_LINES = 6       # widest crops read for the orientation vote
+VOTE_WINDOW = 10.0   # read only the middle of each, this many crop-heights wide
+
+
+def orientation_votes(model: "Model", seg: dict, flip: bool) -> float:
+    """Mean emitting confidence of the 6 widest crops, read greedily at one scale,
+    each cut to its middle window (10 crop heights wide, about 640 px at the
+    model's 64 px): the vote needs letters, not whole lines, and phones without
+    a GPU paid minutes for full lines."""
+    crops = sorted(seg["crops"], key=lambda c: -c.shape[1])[:VOTE_LINES]
+    if not crops:
+        return 0.0
+    vals = []
+    for c in crops:
+        h, w = c.shape[:2]
+        win = int(VOTE_WINDOW * h)
+        if w > win:
+            x0 = (w - win) // 2
+            c = c[:, x0: x0 + win]
+        g = to_gray(rot90(c, 2) if flip else c)
+        vals.append(confidence(model.logprobs(preprocess(g)), True))
+    return float(np.mean(vals))
+
+
+def orient_page(rgb: np.ndarray, model: "Model", max_side=2000) -> tuple[int, dict]:
+    """(quarter turns ccw that make the page upright, its segmentation).
+
+    Sideways: text rows make a sharply striped row profile, so compare the best
+    stripe score upright and turned 90 degrees; when they are within 3x of each
+    other (graph paper, sparse pages) let the model decide between both.
+    Upside down: read the middles of the widest lines both ways, keep the more confident."""
+    if rgb.ndim == 2:
+        rgb = np.stack([rgb] * 3, axis=-1)
+    binary, _ = binarize(to_gray(rgb), max_side)
+    _, s0 = estimate_skew_wide(binary)
+    _, s1 = estimate_skew_wide(rot90(binary, 1))
+    if max(s0, s1) >= 3 * min(s0, s1):
+        bases = [0 if s0 >= s1 else 1]
+    else:
+        bases = [0, 1]
+    best = None
+    for base in bases:
+        seg = segment_page(rot90(rgb, base), max_side)
+        for flip in (False, True):
+            c = orientation_votes(model, seg, flip)
+            if best is None or c > best[0]:
+                best = (c, base, flip, seg)
+    _, base, flip, seg = best
+    turns = (base + (2 if flip else 0)) % 4
+    if flip:
+        seg = segment_page(rot90(rgb, turns), max_side)
+    return turns, seg
 
 
 # --------------------------------------------------------------------------

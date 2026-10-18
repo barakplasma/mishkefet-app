@@ -12,7 +12,9 @@ the reference disagree, the reference is right.
 | [preprocess.md](preprocess.md) | line crop to model input, TTA views | `preprocess`, `tta_view` |
 | [decoder.md](decoder.md) | greedy, prefix beam with LMs, confidence, TTA selection | `beam_search`, `Reader` |
 | [lm-format.md](lm-format.md) | `charlm.bin`, `words.bin` | `CharLM`, `WordLM` |
-| [segmenter.md](segmenter.md) | page to line boxes | `segment_page` |
+| [orientation.md](orientation.md) | paper crop, quarter turns | `find_paper`, `orient_page` |
+| [segmenter.md](segmenter.md) | page to line boxes (deskew up to 44 degrees) | `segment_page` |
+| [straighten.md](straighten.md) | per-line tilt and curve | `straighten_line` |
 | [strokes.md](strokes.md) | training canvas strokes to a line image | `strokes.render` |
 | [adapter.md](adapter.md) | on-device fine-tuning (CTC, head, Adam) | `adapter.py` |
 | [training.md](training.md) | the training screen, word choice, rounds, corrected lines | web `lib/training.ts`, `lib/words.ts` |

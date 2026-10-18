@@ -49,6 +49,56 @@ def big_lines_page(out):
     return {"file": "pages/big-lines.png", "source": "rendered for this repo", "lines": len(BIG_LINES)}
 
 
+def turned_tilted_page(out):
+    """page2 turned a quarter (clockwise as shot sideways) and tilted 20 degrees on a white canvas."""
+    im = Image.open(out / "pages" / "page2.jpg").convert("RGB").rotate(-90, expand=True)
+    im = im.rotate(20, resample=Image.BICUBIC, expand=True, fillcolor=(255, 255, 255))
+    im.thumbnail((1600, 1600), Image.LANCZOS)
+    im.save(out / "pages" / "turned-tilted.jpg", quality=88)
+    return {"file": "pages/turned-tilted.jpg", "source": "page2.jpg turned 270 and tilted 20 degrees"}
+
+
+def screenshot_page(out):
+    """The big-lines page inside near-black phone chrome with white UI text, like a screenshot."""
+    from PIL import ImageDraw, ImageFont
+
+    page = Image.open(out / "pages" / "big-lines.png").convert("RGB")
+    W, H = 1179, 2556
+    shot = Image.new("RGB", (W, H), (8, 8, 8))
+    page = page.resize((W, round(page.height * W / page.width)), Image.LANCZOS)
+    top = 700
+    shot.paste(page, (0, top))
+    d = ImageDraw.Draw(shot)
+    font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial.ttf", 44)
+    d.text((60, 60), "23:59", fill=(240, 240, 240), font=font)
+    d.text((420, 230), "r/hebrew", fill=(240, 240, 240), font=font)
+    d.text((60, top + page.height + 120), "Today's class", fill=(240, 240, 240), font=font)
+    d.rounded_rectangle((40, H - 260, 300, H - 160), 50, outline=(120, 120, 120), width=4)
+    shot.save(out / "pages" / "screenshot.png", optimize=True)
+    return {"file": "pages/screenshot.png", "source": "big-lines.png inside rendered app chrome"}
+
+
+def curved_lines(out, lines):
+    """Three Pinkas lines each given its own tilt and bend (CC-BY derivatives)."""
+    rng = np.random.default_rng(11)
+    res = []
+    for i, line in enumerate(lines[:3]):
+        g = np.asarray(Image.open(out / line["file"]).convert("L"))
+        h, w = g.shape
+        bend = (0.3, -0.25, 0.2)[i]
+        angle = (8.0, -11.0, 5.0)[i]
+        pad = int(abs(bend) * h) + 4
+        canvas = np.full((h + 2 * pad, w), 255, np.uint8)
+        for x in range(w):
+            dy = int(round(bend * h * np.sin(np.pi * x / max(1, w - 1))))
+            canvas[pad - dy: pad - dy + h, x] = g[:, x]
+        im = Image.fromarray(canvas).rotate(angle, resample=Image.BICUBIC, expand=True, fillcolor=255)
+        f = f"lines/curved-{i + 1}.png"
+        im.save(out / f)
+        res.append({"file": f, "truth": line["truth"], "source": line["file"], "angle": angle, "bend": bend})
+    return res
+
+
 def main():
     hebocr()
     from hebocr.data.hebrew_ink import _crop_polygon, _polygon, _usable
@@ -98,6 +148,9 @@ def main():
                     break
 
     meta["pages"].append(big_lines_page(out))
+    meta["pages"].append(turned_tilted_page(out))
+    meta["pages"].append(screenshot_page(out))
+    meta["curved"] = curved_lines(out, meta["lines"])
     (out / "fixtures.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
     print(len(meta["pages"]), "pages,", len(meta["lines"]), "lines")
 

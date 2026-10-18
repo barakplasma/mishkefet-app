@@ -5,11 +5,14 @@ import MishkefetCore
 /// What the app needs from the recognizer. The real one wraps MishkefetCore's `Recognizer` over the
 /// bundled model; DEBUG builds can swap in a fake for screenshots.
 protocol ReadingEngine: AnyObject, Sendable {
-    /// Segments a page and reads its lines. `onSegmented` gets the page the boxes refer to (deskewed)
-    /// before any line is read; `onLine(index, count, line)` after each one.
+    /// Crops a page to the paper, turns it upright, segments it and reads its lines. `onSegmented` gets
+    /// the page the boxes refer to (upright, deskewed, possibly cropped: the image to store) before any
+    /// line is read; `onLine(index, count, line)` after each one. The returned `page` is that image.
     func readPage(_ page: CGImage, head: Head?,
                   onSegmented: @escaping @Sendable (CGImage, [LineBox]) -> Void,
                   onLine: @escaping @Sendable (Int, Int, LineResult) -> Void) async throws -> (page: CGImage, lines: [LineResult])
+    /// Segments and reads a stored page as it is (no paper crop or turning), so the boxes stay in its frame.
+    func readStoredPage(_ page: CGImage, head: Head?) async throws -> [LineResult]
     /// Re-reads known line boxes of a stored page (keeps its segmentation, so readings line up).
     func readLines(of page: CGImage, boxes: [LineBox], head: Head?) async throws -> [LineResult]
     /// Reads a single-line picture.
@@ -21,6 +24,12 @@ protocol ReadingEngine: AnyObject, Sendable {
     func train(samples: [TrainingSample], config: AdaptConfig, progress: @escaping @Sendable (Int, Int) -> Void) async throws -> Head
     /// Releases the ONNX session (it is recreated on demand).
     func unload() async
+}
+
+extension ReadingEngine {
+    func readStoredPage(_ page: CGImage, head: Head?) async throws -> [LineResult] {
+        try await readPage(page, head: head, onSegmented: { _, _ in }, onLine: { _, _, _ in }).lines
+    }
 }
 
 enum EngineError: Error {
@@ -52,19 +61,17 @@ final class CoreReadingEngine: ReadingEngine, @unchecked Sendable {
                   onSegmented: @escaping @Sendable (CGImage, [LineBox]) -> Void,
                   onLine: @escaping @Sendable (Int, Int, LineResult) -> Void) async throws -> (page: CGImage, lines: [LineResult]) {
         let r = try engine()
-        try await r.prepare()
-        let seg = try await r.segment(page: page)
+        let seg = try await r.preparePage(page).segmentation
         let shown = seg.deskewed ?? page
         onSegmented(shown, seg.boxes)
-        var lines: [LineResult] = []
-        for (i, crop) in seg.crops.enumerated() {
-            try Task.checkCancellation()
-            var line = try await r.readLine(crop, head: head, tta: 3)
-            line.box = seg.boxes[i]
-            lines.append(line)
-            onLine(i, seg.crops.count, line)
-        }
+        let lines = try await r.readLines(seg, head: head, tta: 3, onLine: onLine)
         return (shown, lines)
+    }
+
+    func readStoredPage(_ page: CGImage, head: Head?) async throws -> [LineResult] {
+        let r = try engine()
+        let seg = try await r.segment(page: page)
+        return try await r.readLines(seg, head: head, tta: 3, onLine: nil)
     }
 
     func readLines(of page: CGImage, boxes: [LineBox], head: Head?) async throws -> [LineResult] {

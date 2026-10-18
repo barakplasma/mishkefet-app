@@ -21,12 +21,21 @@ public enum Segmenter {
     typealias K = Morphology.Kernel
 
     public static func segment(_ gray: GrayImage) -> Result {
-        var (binary, scale) = binarize(gray)
-        let angle = estimateSkew(binary)
-        var work = gray
-        if abs(angle) > 1e-3 {
+        segment(PageImage(gray: gray))
+    }
+
+    /// `binarized` may pass `binarize(page.gray)` when it is already known.
+    static func segment(_ page: PageImage, binarized: (GrayImage, Double)? = nil) -> Result {
+        var (binary, scale) = binarized ?? binarize(page.gray)
+        let angle = estimateSkewWide(binary).angle
+        var work = page.gray
+        if abs(angle) > 6 {
+            // a strongly tilted photo: rotate onto a canvas big enough to keep the corners
+            binary = rotateNearestExpanded(binary, angle: angle)
+            work = page.rotated(angle, expand: true)
+        } else if abs(angle) > 1e-3 {
             binary = rotateNearest(binary, angle: angle)
-            work = rotateBicubic(gray, angle: angle)
+            work = page.rotated(angle, expand: false)
         }
         var pitch = estimatePitch(binary)
         binary = removeRules(binary, pitch: pitch)
@@ -147,9 +156,50 @@ public enum Segmenter {
         return GrayImage(width: w, height: h, pixels: out)
     }
 
-    /// PIL `rotate(angle, BICUBIC, fillcolor=255)` on a gray image (the a = -1 cubic of
-    /// PIL's affine transform, truncated to uint8).
-    static func rotateBicubic(_ img: GrayImage, angle: Double) -> GrayImage {
+    /// Canvas that holds the whole page rotated by `angle` (PIL's expand rule).
+    static func expandedSize(width w: Int, height h: Int, angle: Double) -> (Int, Int) {
+        let a = angle * .pi / 180
+        let c = cos(a), s = sin(a)
+        var xs: [Double] = [], ys: [Double] = []
+        for (x, y) in [(0, 0), (w, 0), (w, h), (0, h)] {
+            let dx = Double(x) - Double(w) / 2, dy = Double(y) - Double(h) / 2
+            xs.append(c * dx + s * dy)
+            ys.append(-s * dx + c * dy)
+        }
+        return (Int(xs.max()!.rounded(.up)) - Int(xs.min()!.rounded(.down)),
+                Int(ys.max()!.rounded(.up)) - Int(ys.min()!.rounded(.down)))
+    }
+
+    /// Nearest-neighbour rotation onto the expanded canvas, centre to centre, 0 outside.
+    static func rotateNearestExpanded(_ img: GrayImage, angle: Double) -> GrayImage {
+        let w = img.width, h = img.height
+        let (W, H) = expandedSize(width: w, height: h, angle: angle)
+        let a = angle * .pi / 180
+        let c = cos(a), s = sin(a)
+        var out = [UInt8](repeating: 0, count: W * H)
+        img.pixels.withUnsafeBufferPointer { src in
+            out.withUnsafeMutableBufferPointer { dst in
+                let hw: Double = Double(w) / 2, hh: Double = Double(h) / 2
+                let hW: Double = Double(W) / 2, hH: Double = Double(H) / 2
+                for y in 0..<H {
+                    let dy: Double = Double(y) - hH
+                    for x in 0..<W {
+                        let dx: Double = Double(x) - hW
+                        let fx: Double = c * dx - s * dy + hw + 0.5
+                        let fy: Double = s * dx + c * dy + hh + 0.5
+                        let sx = Int(fx.rounded(.down)), sy = Int(fy.rounded(.down))
+                        if sx >= 0 && sx < w && sy >= 0 && sy < h { dst[y * W + x] = src[sy * w + sx] }
+                    }
+                }
+            }
+        }
+        return GrayImage(width: W, height: H, pixels: out)
+    }
+
+    /// PIL `rotate(angle, BICUBIC, expand, fillcolor=255)` on a gray image (the a = -1 cubic of
+    /// PIL's affine transform, truncated to uint8). With `expand`, PIL's canvas is cropped
+    /// about its centre to `expandedSize` (as the reference does when they differ).
+    static func rotateBicubic(_ img: GrayImage, angle: Double, expand: Bool = false) -> GrayImage {
         let w = img.width, h = img.height
         func r15(_ v: Double) -> Double { (v * 1e15).rounded() / 1e15 }
         let a = -(angle.truncatingRemainder(dividingBy: 360) + (angle < 0 ? 360 : 0)) * .pi / 180
@@ -157,15 +207,36 @@ public enum Segmenter {
         let cx = Double(w) / 2, cy = Double(h) / 2
         m[2] = m[0] * -cx + m[1] * -cy + m[2] + cx
         m[5] = m[3] * -cx + m[4] * -cy + m[5] + cy
-        var out = [UInt8](repeating: 255, count: w * h)
+        var nw = w, nh = h, W = w, H = h
+        if expand {
+            var xs: [Double] = [], ys: [Double] = []
+            for (x, y) in [(0, 0), (w, 0), (w, h), (0, h)] {
+                xs.append(m[0] * Double(x) + m[1] * Double(y) + m[2])
+                ys.append(m[3] * Double(x) + m[4] * Double(y) + m[5])
+            }
+            nw = Int(xs.max()!.rounded(.up)) - Int(xs.min()!.rounded(.down))
+            nh = Int(ys.max()!.rounded(.up)) - Int(ys.min()!.rounded(.down))
+            let tx = -Double(nw - w) / 2, ty = -Double(nh - h) / 2
+            (m[2], m[5]) = (m[0] * tx + m[1] * ty + m[2], m[3] * tx + m[4] * ty + m[5])
+            (W, H) = expandedSize(width: w, height: h, angle: angle)
+        }
+        // output (x, y) is PIL's pixel (x + ox, y + oy); outside PIL's canvas is 0
+        let ox = Int((Double(nw - W) / 2).rounded(.down)), oy = Int((Double(nh - H) / 2).rounded(.down))
+        var out = [UInt8](repeating: 255, count: W * H)
         img.pixels.withUnsafeBufferPointer { src in
             out.withUnsafeMutableBufferPointer { dst in
-                let rows = min(h, 8)
+                let rows = min(H, 8)
                 DispatchQueue.concurrentPerform(iterations: rows) { chunk in
-                    for y in (chunk * h / rows)..<((chunk + 1) * h / rows) {
-                        let fy = Double(y) + 0.5
-                        for x in 0..<w {
-                            let fx = Double(x) + 0.5
+                    for y in (chunk * H / rows)..<((chunk + 1) * H / rows) {
+                        let py = y + oy
+                        let fy = Double(py) + 0.5
+                        for x in 0..<W {
+                            let px = x + ox
+                            if px < 0 || px >= nw || py < 0 || py >= nh {
+                                dst[y * W + x] = 0
+                                continue
+                            }
+                            let fx = Double(px) + 0.5
                             var xin = m[0] * fx + m[1] * fy + m[2]
                             var yin = m[3] * fx + m[4] * fy + m[5]
                             if xin < 0 || xin >= Double(w) || yin < 0 || yin >= Double(h) { continue }
@@ -184,13 +255,13 @@ public enum Segmenter {
                             let v3 = iy + 2 >= 0 && iy + 2 < h ? cubicRow(s + (iy + 2) * w, x0, x1, x2, x3, dx) : v2
                             let v4 = iy + 3 >= 0 && iy + 3 < h ? cubicRow(s + (iy + 3) * w, x0, x1, x2, x3, dx) : v3
                             let value = cubic(v1, v2, v3, v4, dy)
-                            dst[y * w + x] = value <= 0 ? 0 : (value >= 255 ? 255 : UInt8(value))
+                            dst[y * W + x] = value <= 0 ? 0 : (value >= 255 ? 255 : UInt8(value))
                         }
                     }
                 }
             }
         }
-        return GrayImage(width: w, height: h, pixels: out)
+        return GrayImage(width: W, height: H, pixels: out)
     }
 
     @inline(__always) private static func cubic(_ v1: Double, _ v2: Double, _ v3: Double, _ v4: Double,
@@ -204,24 +275,78 @@ public enum Segmenter {
         cubic(Double(p[x0]), Double(p[x1]), Double(p[x2]), Double(p[x3]), d)
     }
 
+    static func halfSize(_ binary: GrayImage) -> GrayImage {
+        ImageOps.resizeArea(binary, width: max(1, ImageOps.roundHalfEven(Double(binary.width) * 0.5)),
+                            height: max(1, ImageOps.roundHalfEven(Double(binary.height) * 0.5)), sx: 2, sy: 2)
+    }
+
     /// Angle in [-6, 6] (0.5 steps) maximizing the variance of the row-profile derivative.
     public static func estimateSkew(_ binary: GrayImage) -> Double {
-        let small = ImageOps.resizeArea(binary, width: ImageOps.roundHalfEven(Double(binary.width) * 0.5),
-                                        height: ImageOps.roundHalfEven(Double(binary.height) * 0.5), sx: 2, sy: 2)
+        estimateSkew(half: halfSize(binary))
+    }
+
+    static func estimateSkew(half small: GrayImage) -> Double {
         var bestAngle = 0.0, best = -1.0
         for i in 0..<25 {
             let angle = -6 + Double(i) * 0.5
-            let prof = rotateNearest(small, angle: angle).rowSums()
-            guard prof.count > 1 else { continue }
-            let diff = (1..<prof.count).map { prof[$0] - prof[$0 - 1] }
-            let mean = diff.reduce(0, +) / Double(diff.count)
-            let score = diff.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(diff.count)
+            let score = variance(ofDiff: rotateNearest(small, angle: angle).rowSums())
             if score > best {
                 bestAngle = angle
                 best = score
             }
         }
         return bestAngle
+    }
+
+    /// Population variance of the first differences (0 when there are none).
+    private static func variance(ofDiff prof: [Double]) -> Double {
+        guard prof.count > 1 else { return 0 }
+        let diff = (1..<prof.count).map { prof[$0] - prof[$0 - 1] }
+        let mean = diff.reduce(0, +) / Double(diff.count)
+        return diff.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(diff.count)
+    }
+
+    /// Row-profile sharpness at `angle`, per unit width (comparable across orientations).
+    static func stripeScore(_ small: GrayImage, angle: Double) -> Double {
+        let norm = 255 * Double(small.width)
+        return variance(ofDiff: rotateNearest(small, angle: angle).rowSums().map { $0 / norm })
+    }
+
+    /// (angle, stripe score): a coarse search over +-44 degrees at quarter resolution; within
+    /// +-6 the original fine search decides, beyond it a 0.5-degree search around the coarse answer.
+    public static func estimateSkewWide(_ binary: GrayImage) -> (angle: Double, score: Double) {
+        let w = binary.width, h = binary.height
+        let q = ImageOps.resizeArea(binary, width: max(1, ImageOps.roundHalfEven(Double(w) / 4)),
+                                    height: max(1, ImageOps.roundHalfEven(Double(h) / 4)), sx: 4, sy: 4)
+        var coarse = 0.0, best = -1.0, worst = Double.infinity
+        for i in 0...44 {
+            let a = Double(-44 + 2 * i)
+            let sc = stripeScore(q, angle: a)
+            worst = min(worst, sc)
+            if sc > best {
+                coarse = a
+                best = sc
+            }
+        }
+        let half = halfSize(binary)
+        // every angle scores the same (a page without ink): leave it level
+        if best <= worst { return (0, stripeScore(half, angle: 0)) }
+        var angle: Double
+        if abs(coarse) <= 6 {
+            angle = estimateSkew(half: half)
+        } else {
+            angle = coarse - 2
+            best = -1
+            for i in 0..<9 {
+                let a = coarse - 2 + 0.5 * Double(i)
+                let sc = stripeScore(half, angle: a)
+                if sc > best {
+                    angle = a
+                    best = sc
+                }
+            }
+        }
+        return (angle, stripeScore(half, angle: angle))
     }
 
     /// First autocorrelation peak of the row profile.
@@ -293,15 +418,17 @@ public enum Segmenter {
         sm = Morphology.erode(Morphology.dilate(sm, K.rect(width: sx, height: 1)), K.rect(width: sx, height: 1))
         return components(sm).compactMap { c in
             let w = Double(c.box.w), h = Double(c.box.h)
-            if w < pitch * 0.8 || h < pitch * 0.25 || h > pitch * 12 || Double(c.area) < pitch * pitch * 0.12 {
+            if w < pitch * 0.8 || h < pitch * 0.25 || Double(c.area) < pitch * pitch * 0.12 {
                 return nil
             }
+            // tall and mostly empty is a box outline; tall and dense is a paragraph that smeared together (spec/segmenter.md)
+            if h > pitch * 12 && Double(c.area) / (w * h) < 0.35 { return nil }
             return c.box
         }
     }
 
-    /// 8-connected components of nonzero pixels, numbered in raster order of their first pixel.
-    static func components(_ img: GrayImage) -> [(box: Box, area: Int)] {
+    /// 8- (or 4-) connected components of nonzero pixels, numbered in raster order of their first pixel.
+    static func components(_ img: GrayImage, eightConnected: Bool = true) -> [(box: Box, area: Int)] {
         let w = img.width, h = img.height
         var label = [Int32](repeating: 0, count: w * h)
         var out: [(box: Box, area: Int)] = []
@@ -318,7 +445,7 @@ public enum Segmenter {
                         area += 1
                         x0 = min(x0, x); x1 = max(x1, x); y0 = min(y0, y); y1 = max(y1, y)
                         for ny in max(y - 1, 0)...min(y + 1, h - 1) {
-                            for nx in max(x - 1, 0)...min(x + 1, w - 1) {
+                            for nx in max(x - 1, 0)...min(x + 1, w - 1) where eightConnected || nx == x || ny == y {
                                 let q = ny * w + nx
                                 if px[q] != 0 && lab[q] == 0 {
                                     lab[q] = id

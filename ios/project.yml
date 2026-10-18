@@ -114,6 +114,7 @@ targets:
         # On-device only: no network calls, no encryption beyond the OS.
         ITSAppUsesNonExemptEncryption: false
         NSCameraUsageDescription: "משקפת מצלמת דפים כדי לקרוא כתב יד. התמונות והקריאות נשארות במכשיר בלבד."
+        NSPhotoLibraryAddUsageDescription: "משקפת שומרת בתמונות את הדפים שסרקתם, רק כשתבקשו."
         UISupportsDocumentBrowser: false
         LSSupportsOpeningDocumentsInPlace: false
         UIApplicationSupportsIndirectInputEvents: true

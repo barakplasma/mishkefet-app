@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The design's 24x24 stroke icons, parsed from their SVG path data.
 enum Glyph {
-    case menu, upload, chevronBack, chevron, pencil, check, copy, share, trash, close, gallery
+    case menu, upload, chevronBack, chevron, pencil, check, copy, share, trash, close, gallery, download
 
     fileprivate var data: String {
         switch self {
@@ -14,6 +14,7 @@ enum Glyph {
         case .check: return "M5 12.5l4.5 4.5L19 7.5"
         case .copy: return ""
         case .share: return "M12 14V4M7.5 8.5L12 4l4.5 4.5M5 13v6h14v-6"
+        case .download: return "M12 4v10M7.5 9.5L12 14l4.5-4.5M5 15v4h14v-4"
         case .trash: return "M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12"
         case .close: return "M6 6l12 12M18 6L6 18"
         case .gallery: return "M5 17l5-4.5 3.5 3 2.5-2 3.5 3"

@@ -50,7 +50,7 @@ is no space), punctuation included. Note `getOrInsert` on `prefix` for the
 repeat case happens **before** the extension is inserted.
 
 ## Reading a line (TTA 3)
-For each scale in `1.0, 0.82, 1.22`: view, preprocess, model, beam. Score =
+First [straighten](straighten.md) the crop (usually a no-op). Then for each scale in `1.0, 0.82, 1.22`: view, preprocess, model, beam. Score =
 emitting confidence, or -inf if the text is blank after trimming whitespace.
 Keep the first view with the strictly highest score. The line's stored
 confidence is the all-frame confidence of the scale-1.0 view.
@@ -58,5 +58,9 @@ confidence is the all-frame confidence of the scale-1.0 view.
 With TTA 1 (training check, web on WASM), just the scale-1.0 view.
 
 ## Page
-Segment ([segmenter.md](segmenter.md)), read every crop in reading order. Lines
-whose text is blank are dropped from the transcript; nothing else is filtered.
+Crop to the paper and turn it upright ([orientation.md](orientation.md)), segment
+([segmenter.md](segmenter.md)), read every crop in reading order. Dropped from the
+transcript: blank lines, and lines of at most 3 characters (spaces not counted) whose
+all-frame confidence is below 0.9, which are fragments of ruling, margins or a spiral
+binding. On the benchmark that removes 13 junk lines and no real one (real short lines
+read at 0.97 and above).

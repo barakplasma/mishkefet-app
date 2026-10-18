@@ -108,10 +108,34 @@ enum Fixtures {
     struct Page: Decodable {
         let file: String
         let scale: Double
+        /// Plain segmentation of the page as given.
         let angle: Double
         let pitch: Double
         let boxes: [LineBox]
+        /// The full read: paper crop, quarter turns, wide deskew, straightened lines.
+        let read: Read
+    }
+
+    struct Read: Decodable {
+        let paper: [Int]?
+        let turns: Int
+        let angle: Double
+        /// [width, height] of the upright deskewed page.
+        let deskewed: [Int]
+        let boxes: [LineBox]
         let lines: [String]
+    }
+
+    struct StraightenCase: Decodable {
+        let file: String
+        let `in`: [Int]
+        let out: [Int]
+        let changed: Bool
+        let sum: Int
+    }
+
+    static func page(_ suffix: String) throws -> Page {
+        try XCTUnwrap(try pages().first { $0.file.hasSuffix(suffix) }, "no golden page \(suffix)")
     }
 
     static func decode<T: Decodable>(_ type: T.Type, _ name: String) throws -> T {

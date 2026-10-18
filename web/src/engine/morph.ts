@@ -93,11 +93,19 @@ export function transposeKernel(k: Kernel): Kernel {
   return { rows: k.cols, cols: k.rows, runs }
 }
 
+/** Transpose in 64 x 64 tiles (cache-friendly on page-sized masks). */
 export function transpose(a: Uint8Array, w: number, h: number): Uint8Array {
   const out = new Uint8Array(w * h)
-  for (let y = 0; y < h; y++) {
-    const r = y * w
-    for (let x = 0; x < w; x++) out[x * h + y] = a[r + x]
+  const B = 64
+  for (let y0 = 0; y0 < h; y0 += B) {
+    const y1 = Math.min(y0 + B, h)
+    for (let x0 = 0; x0 < w; x0 += B) {
+      const x1 = Math.min(x0 + B, w)
+      for (let y = y0; y < y1; y++) {
+        const r = y * w
+        for (let x = x0; x < x1; x++) out[x * h + y] = a[r + x]
+      }
+    }
   }
   return out
 }

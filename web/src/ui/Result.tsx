@@ -5,7 +5,7 @@ import { cropLine } from '../lib/images.ts'
 import { dateLabel, linesLabel } from '../lib/text.ts'
 import { recordLine } from '../lib/training.ts'
 import type { ModelChoice } from './App.tsx'
-import { BackIcon, CheckIcon, CopyIcon, GalleryIcon, PencilIcon, ShareIcon, TrashIcon } from './icons.tsx'
+import { BackIcon, CheckIcon, CopyIcon, DownloadIcon, GalleryIcon, PencilIcon, ShareIcon, TrashIcon } from './icons.tsx'
 import { ModelToggle } from './Sheets.tsx'
 
 const IMG_H = 170
@@ -116,6 +116,25 @@ export function Result(props: {
     } else void copy()
   }
 
+  /** Phones get the share sheet with the picture (it offers "Save Image"); elsewhere it downloads. */
+  const saveImage = async () => {
+    const name = `${scan.title.replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'mishkefet'}.jpg`
+    const file = new File([scan.image], name, { type: scan.image.type || 'image/jpeg' })
+    if (navigator.canShare?.({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file] })
+      } catch {
+        /* dismissed */
+      }
+      return
+    }
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(file)
+    a.download = name
+    a.click()
+    window.setTimeout(() => URL.revokeObjectURL(a.href), 4000)
+  }
+
   // image frame: contain the scan into frameW x IMG_H
   const s = Math.min(frameW / scan.width, IMG_H / scan.height)
   const ox = (frameW - scan.width * s) / 2
@@ -195,6 +214,7 @@ export function Result(props: {
             <CopyIcon />
             {copied ? 'הועתק' : 'העתקת הטקסט'}
           </button>
+          <button className="round-btn" onClick={() => void saveImage()} aria-label="שמירת התמונה"><DownloadIcon /></button>
           <button className="round-btn" onClick={() => void share()} aria-label="שיתוף"><ShareIcon /></button>
         </div>
       )}

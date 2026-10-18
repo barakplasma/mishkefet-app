@@ -8,8 +8,8 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import type { HeadData, LineBox, LineResult } from '../engine/api.ts'
 import { db, newId, type ModelId, type Scan, type Settings } from '../lib/db.ts'
 import { CancelledError, getEngine, type ModelState } from '../lib/engine.ts'
-import { imageData, picturesFromFile, thumbnail, type Picture } from '../lib/images.ts'
-import { defaultTitle } from '../lib/text.ts'
+import { blobFromRGBA, imageData, picturesFromFile, thumbnail, type Picture } from '../lib/images.ts'
+import { defaultTitle, keepLine } from '../lib/text.ts'
 import { currentHead, headForModel } from '../lib/training.ts'
 import { Camera } from './Camera.tsx'
 import { Compare, type CompareState } from './Compare.tsx'
@@ -110,6 +110,9 @@ export function App() {
       setProc({ image: url, width: pic.width, height: pic.height, boxes: [], done: 0, total: 0, lastText: '', picture: index + 1, pictures: count, kind })
       const rgba = await imageData(pic.blob)
       let lines: LineResult[]
+      // a page is stored as the engine prepared it: cropped to the paper, upright, deskewed
+      let stored = { blob: pic.blob, width: pic.width, height: pic.height }
+      let prepared: Promise<void> = Promise.resolve()
       try {
         if (kind === 'line') {
           const r = await engine.readLine(rgba, head)
@@ -117,20 +120,28 @@ export function App() {
           setProc((p) => p && { ...p, boxes: [{ x: 0, y: 0, w: pic.width, h: pic.height }], total: 1, done: 1, lastText: r.text })
         } else {
           const job = engine.readPage(rgba, head, {
-            segmented: (boxes: LineBox[]) => setProc((p) => p && { ...p, boxes, total: boxes.length }),
+            segmented: (page) => {
+              prepared = blobFromRGBA(page.image.rgba, page.image.width, page.image.height).then((blob) => {
+                stored = { blob, width: page.image.width, height: page.image.height }
+                const shown = URL.createObjectURL(blob)
+                setProc((p) => p && { ...p, image: shown, width: stored.width, height: stored.height })
+              })
+              setProc((p) => p && { ...p, boxes: page.boxes, total: page.boxes.length })
+            },
             line: (i, total, r) => setProc((p) => p && { ...p, done: i + 1, total, lastText: r.text || p.lastText }),
           })
           cancelRef.current = job.cancel
           lines = await job.done
+          await prepared
         }
       } finally {
         cancelRef.current = () => {}
       }
       const now = Date.now()
-      const kept = lines.filter((l) => l.text.trim())
+      const kept = lines.filter(keepLine)
       const scan: Scan = {
         id: newId(), title: defaultTitle(kept.map((l) => l.text), now) || pic.name, createdAt: now, kind,
-        image: pic.blob, thumb: await thumbnail(pic.blob), width: pic.width, height: pic.height,
+        image: stored.blob, thumb: await thumbnail(stored.blob), width: stored.width, height: stored.height,
         readings: [{ model: modelIdOf(choice), lines: kept, createdAt: now }], current: 0,
       }
       await db.putScan(scan)
@@ -191,8 +202,10 @@ export function App() {
         const r = await engine.readLine(rgba, head)
         return [{ ...r, box: { x: 0, y: 0, w: scan.width, h: scan.height } }]
       }
-      const lines = await engine.readPage(rgba, head, {}).done
-      return lines.filter((l) => l.text.trim())
+      // same boxes on the stored (prepared) page, so old and new lines pair by box
+      const boxes = scan.readings[scan.current].lines.map((l) => l.box).filter((b): b is LineBox => !!b)
+      if (!boxes.length) return (await engine.readPage(rgba, head, {}).done).filter(keepLine)
+      return engine.readBoxes(rgba, boxes, head)
     },
     [engine],
   )

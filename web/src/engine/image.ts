@@ -167,9 +167,20 @@ function correlateRowsFFT(a: Float64Array, width: number, height: number, k: Flo
   return out
 }
 
+/** Transpose in 32 x 32 tiles (a plain double loop thrashes the cache on page-sized arrays). */
 function transpose64(a: Float64Array, w: number, h: number): Float64Array {
   const out = new Float64Array(w * h)
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) out[x * h + y] = a[y * w + x]
+  const B = 32
+  for (let y0 = 0; y0 < h; y0 += B) {
+    const y1 = Math.min(y0 + B, h)
+    for (let x0 = 0; x0 < w; x0 += B) {
+      const x1 = Math.min(x0 + B, w)
+      for (let y = y0; y < y1; y++) {
+        const r = y * w
+        for (let x = x0; x < x1; x++) out[x * h + y] = a[r + x]
+      }
+    }
+  }
   return out
 }
 
@@ -408,32 +419,59 @@ export function rgbToGray(rgb: Rgb): Gray {
   return { data: out, width: rgb.width, height: rgb.height }
 }
 
+/** Canvas that holds the whole image rotated by `angle` degrees (PIL's expand=True rule). */
+export function expandedSize(w: number, h: number, angle: number): { width: number; height: number } {
+  const a = angle * (Math.PI / 180)
+  const c = Math.cos(a)
+  const s = Math.sin(a)
+  let x0 = Infinity
+  let x1 = -Infinity
+  let y0 = Infinity
+  let y1 = -Infinity
+  for (const [x, y] of [
+    [0, 0],
+    [w, 0],
+    [w, h],
+    [0, h],
+  ]) {
+    const dx = x - w / 2
+    const dy = y - h / 2
+    const px = c * dx + s * dy
+    const py = -s * dx + c * dy
+    x0 = Math.min(x0, px)
+    x1 = Math.max(x1, px)
+    y0 = Math.min(y0, py)
+    y1 = Math.max(y1, py)
+  }
+  return { width: Math.ceil(x1) - Math.floor(x0), height: Math.ceil(y1) - Math.floor(y0) }
+}
+
 /**
- * The `rect` of an image (`channels` bytes per pixel) rotated by `angle`
- * degrees (counter-clockwise on screen) about the image centre, sampled the
- * way PIL's Image.rotate(BICUBIC, fillcolor=white) does: pixel centres, the
- * a = -1 cubic, edge-clamped neighbours, each channel truncated to uint8.
- * Only the crop is computed, so deskewing costs nothing beyond the line crops.
+ * Rotate an image (`channels` bytes per pixel) by `angle` degrees,
+ * counter-clockwise on screen, the way PIL's Image.rotate(BICUBIC,
+ * fillcolor=white) does: pixel centres, the a = -1 cubic, edge-clamped
+ * neighbours, each channel truncated to uint8. `expand` puts it on a canvas
+ * that holds the whole rotated image (centre to centre); otherwise the canvas
+ * keeps its size.
  */
-function rotatedCrop(data: Uint8Array, W: number, H: number, channels: number, angle: number, rect: Rect): Uint8Array {
-  const out = new Uint8Array(rect.w * rect.h * channels)
+function rotateBicubic(data: Uint8Array, W: number, H: number, channels: number, angle: number, expand: boolean) {
+  const { width: OW, height: OH } = expand ? expandedSize(W, H, angle) : { width: W, height: H }
+  const out = new Uint8Array(OW * OH * channels)
   const a = (angle * Math.PI) / 180
   const c = Math.cos(a)
   const s = Math.sin(a)
-  const cx = W / 2
-  const cy = H / 2
   const stride = W * channels
   const row = (y: number) => (y < 0 ? 0 : y >= H ? H - 1 : y) * stride
   const col = (x: number) => (x < 0 ? 0 : x >= W ? W - 1 : x) * channels
   const cub = (v1: number, v2: number, v3: number, v4: number, d: number) =>
     v2 + d * (-v1 + v3 + d * (2 * (v1 - v2) + v3 - v4 + d * (-v1 + v2 - v3 + v4)))
-  for (let j = 0; j < rect.h; j++) {
-    const Y = rect.y + j + 0.5 - cy
-    for (let i = 0; i < rect.w; i++) {
-      const X = rect.x + i + 0.5 - cx
-      let xin = c * X - s * Y + cx
-      let yin = s * X + c * Y + cy
-      const o = (j * rect.w + i) * channels
+  for (let j = 0; j < OH; j++) {
+    const Y = j + 0.5 - OH / 2
+    for (let i = 0; i < OW; i++) {
+      const X = i + 0.5 - OW / 2
+      let xin = c * X - s * Y + W / 2
+      let yin = s * X + c * Y + H / 2
+      const o = (j * OW + i) * channels
       if (xin < 0 || xin >= W || yin < 0 || yin >= H) {
         out.fill(255, o, o + channels)
         continue
@@ -462,21 +500,86 @@ function rotatedCrop(data: Uint8Array, W: number, H: number, channels: number, a
       }
     }
   }
-  return out
+  return { data: out, width: OW, height: OH }
 }
 
-/** Rotated crop of a gray image (white outside). */
-export function cropRotated(g: Gray, angle: number, rect: Rect): Gray {
-  return { data: rotatedCrop(g.data, g.width, g.height, 1, angle, rect), width: rect.w, height: rect.h }
+/** RGB page rotated bicubically (white outside), on the same or an expanded canvas. */
+export function rotateRgb(img: Rgb, angle: number, expand = false): Rgb {
+  return rotateBicubic(img.data, img.width, img.height, 3, angle, expand)
 }
 
-/** Rotated crop of an RGB image, converted to gray after rotating, as the reference does. */
-export function cropRotatedRgb(img: Rgb, angle: number, rect: Rect): Gray {
-  const rgb = rotatedCrop(img.data, img.width, img.height, 3, angle, rect)
-  return rgbToGray({ data: rgb, width: rect.w, height: rect.h })
+/** Gray image rotated the same way. */
+export function rotateGray(img: Gray, angle: number, expand = false): Gray {
+  return rotateBicubic(img.data, img.width, img.height, 1, angle, expand)
 }
 
-/** A plain (unrotated) crop of a gray image. */
+/**
+ * k quarter turns counter-clockwise as displayed (numpy rot90): for k = 1,
+ * out[y][x] = in[x][W - 1 - y] and the output is H wide, W tall.
+ */
+export function rot90<T extends { data: Uint8Array; width: number; height: number }>(img: T, k: number, channels = 1): T {
+  const turns = ((k % 4) + 4) % 4
+  if (!turns) return img
+  const { width: W, height: H, data } = img
+  const OW = turns === 2 ? W : H
+  const OH = turns === 2 ? H : W
+  const out = new Uint8Array(data.length)
+  for (let y = 0; y < OH; y++) {
+    for (let x = 0; x < OW; x++) {
+      let sx: number
+      let sy: number
+      if (turns === 1) {
+        sx = W - 1 - y
+        sy = x
+      } else if (turns === 2) {
+        sx = W - 1 - x
+        sy = H - 1 - y
+      } else {
+        sx = y
+        sy = H - 1 - x
+      }
+      const o = (y * OW + x) * channels
+      const p = (sy * W + sx) * channels
+      for (let c = 0; c < channels; c++) out[o + c] = data[p + c]
+    }
+  }
+  return { ...img, data: out, width: OW, height: OH }
+}
+
+/** Otsu's threshold over uint8 values: the first maximum of the between-class variance. */
+export function otsuThreshold(values: ArrayLike<number>): number {
+  const hist = new Float64Array(256)
+  for (let i = 0; i < values.length; i++) hist[values[i]]++
+  const total = Math.max(values.length, 1)
+  // cumulative sums in order, like numpy's cumsum
+  const omega = new Float64Array(256)
+  const mu = new Float64Array(256)
+  let o = 0
+  let m = 0
+  for (let t = 0; t < 256; t++) {
+    const p = hist[t] / total
+    o += p
+    m += p * t
+    omega[t] = o
+    mu[t] = m
+  }
+  const muT = mu[255]
+  let best = 0
+  let bestV = -Infinity
+  for (let t = 0; t < 256; t++) {
+    const d = muT * omega[t] - mu[t]
+    let v = (d * d) / (omega[t] * (1 - omega[t]))
+    if (Number.isNaN(v)) v = 0
+    else if (v === Infinity) v = Number.MAX_VALUE
+    if (v > bestV) {
+      bestV = v
+      best = t
+    }
+  }
+  return best
+}
+
+/** A plain crop of a gray image. */
 export function crop(g: Gray, rect: Rect): Gray {
   const out = new Uint8Array(rect.w * rect.h)
   for (let j = 0; j < rect.h; j++) {
@@ -484,4 +587,27 @@ export function crop(g: Gray, rect: Rect): Gray {
     out.set(g.data.subarray(p, p + rect.w), j * rect.w)
   }
   return { data: out, width: rect.w, height: rect.h }
+}
+
+/** A plain crop of an RGB image. */
+export function cropRgb(img: Rgb, rect: Rect): Rgb {
+  const out = new Uint8Array(rect.w * rect.h * 3)
+  for (let j = 0; j < rect.h; j++) {
+    const p = ((rect.y + j) * img.width + rect.x) * 3
+    out.set(img.data.subarray(p, p + rect.w * 3), j * rect.w * 3)
+  }
+  return { data: out, width: rect.w, height: rect.h }
+}
+
+/** RGB to RGBA (opaque), the layout canvases and ImageData use. */
+export function rgbToRgba(img: Rgb): Uint8ClampedArray {
+  const n = img.width * img.height
+  const out = new Uint8ClampedArray(n * 4)
+  for (let i = 0, p = 0, q = 0; i < n; i++, p += 3, q += 4) {
+    out[q] = img.data[p]
+    out[q + 1] = img.data[p + 1]
+    out[q + 2] = img.data[p + 2]
+    out[q + 3] = 255
+  }
+  return out
 }

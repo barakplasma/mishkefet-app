@@ -151,3 +151,10 @@ export function grayToDataUrl(gray: Uint8Array, width: number, height: number): 
   g.putImageData(img, 0, 0)
   return c.toDataURL('image/png')
 }
+
+/** The engine's prepared page (raw RGBA) as a JPEG blob to store with the scan. */
+export async function blobFromRGBA(rgba: Uint8ClampedArray, width: number, height: number): Promise<Blob> {
+  const c = canvas(width, height)
+  ctx2d(c).putImageData(new ImageData(new Uint8ClampedArray(rgba), width, height), 0, 0)
+  return toBlob(c, 'image/jpeg', 0.9)
+}

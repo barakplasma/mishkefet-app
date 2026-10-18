@@ -47,7 +47,7 @@ def gray(f):
 
 def lines(model, reader1, reader3, chars):
     out = []
-    for line in FIX["lines"]:
+    for line in FIX["lines"] + FIX.get("curved", []):
         g = gray(line["file"])
         x = R.preprocess(g)
         (OUT / "preprocess" / f"{stem(line['file'])}.u8").write_bytes(
@@ -66,17 +66,36 @@ def lines(model, reader1, reader3, chars):
 
 
 def pages(reader3):
+    """Per page: binarize output, the plain segmentation (no crop or turning), and the
+    full read (paper crop, quarter turns, wide deskew, straightening)."""
     out = []
     for page in FIX["pages"]:
         rgb = np.asarray(Image.open(SPEC / "fixtures" / page["file"]).convert("RGB"))
         binary, scale = R.binarize(R.to_gray(rgb))
         Image.fromarray(binary).save(OUT / "pages" / f"{stem(page['file'])}.binary.png", optimize=True)
-        res = reader3.read_page(rgb)
         seg = R.segment_page(rgb)
+        res = reader3.read_page(rgb)
         out.append({
-            "file": page["file"], "scale": scale, "angle": res["angle"], "pitch": seg["pitch"],
-            "boxes": seg["boxes"], "lines": [l["text"] for l in res["lines"]],
+            "file": page["file"], "scale": scale, "angle": seg["angle"], "pitch": seg["pitch"], "boxes": seg["boxes"],
+            "read": {
+                "paper": list(res["paper"]) if res["paper"] else None, "turns": res["turns"], "angle": res["angle"],
+                "deskewed": [int(res["deskewed"].shape[1]), int(res["deskewed"].shape[0])],
+                "boxes": [l["box"] for l in res["lines"]], "lines": [l["text"] for l in res["lines"]],
+            },
         })
+    return out
+
+
+def straighten_vectors():
+    """straighten_line on the fixture lines (mostly unchanged) and the curved ones."""
+    out = []
+    for line in FIX["lines"] + FIX.get("curved", []):
+        g = gray(line["file"])
+        s = R.straighten_line(g)
+        out.append({"file": line["file"], "in": [int(g.shape[1]), int(g.shape[0])], "out": [int(s.shape[1]), int(s.shape[0])],
+                    "changed": s is not g, "sum": int(s.astype(np.int64).sum())})
+        if s is not g:
+            Image.fromarray(s).save(OUT / "straighten" / f"{stem(line['file'])}.png", optimize=True)
     return out
 
 
@@ -168,7 +187,7 @@ def stroke_vectors(reader1, chars):
 def main():
     if OUT.exists():
         shutil.rmtree(OUT)
-    for d in ("preprocess", "logprobs", "pages", "strokes"):
+    for d in ("preprocess", "logprobs", "pages", "strokes", "straighten"):
         (OUT / d).mkdir(parents=True)
     model = R.Model(backbone=BACKBONE)
     reader1 = R.Reader(model, tta=1)
@@ -177,6 +196,7 @@ def main():
     write = lambda name, obj: (OUT / name).write_text(json.dumps(obj, ensure_ascii=False, indent=1))
     write("lines.json", lines(model, reader1, reader3, chars))
     write("pages.json", pages(reader3))
+    write("straighten.json", straighten_vectors())
     write("lm.json", lm_vectors(reader1, chars))
     write("ctc.json", ctc_vectors())
     write("adapter.json", adapter_vectors())

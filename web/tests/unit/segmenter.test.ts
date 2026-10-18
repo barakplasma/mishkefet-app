@@ -1,10 +1,10 @@
 import { join } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
-import type { Gray } from '../../src/engine/image.ts'
+import { expandedSize, rgbaToRgb, rgbToGray, rot90, type Rgb } from '../../src/engine/image.ts'
 import { cvLine, lineKernel, morph, rectKernel } from '../../src/engine/morph.ts'
-import { binarize, cropRect, segmentPage, toOriginal, type Box } from '../../src/engine/segmenter.ts'
+import { binarize, cropRect, estimateSkewWide, rotateNearestExpand, segmentPage, type Box } from '../../src/engine/segmenter.ts'
 import { golden, stem } from './fixtures.ts'
-import { loadGray, loadPngChannel } from './images.ts'
+import { loadPngChannel, loadRgba } from './images.ts'
 import { SPEC } from './paths.ts'
 
 interface Page {
@@ -23,15 +23,17 @@ function iou(a: Box, b: Box): number {
   return i / (a.w * a.h + b.w * b.h - i)
 }
 
+// The plain segmentation of each fixture page as it is (no paper crop, no turning).
 for (const page of golden<Page[]>('pages.json')) {
   describe(`segmentation of ${stem(page.file)}`, () => {
-    let gray: Gray
+    let rgb: Rgb
     beforeAll(async () => {
-      gray = await loadGray(join(SPEC, 'fixtures', page.file))
+      const im = await loadRgba(join(SPEC, 'fixtures', page.file))
+      rgb = rgbaToRgb(im.data, im.width, im.height)
     })
 
     it('binary mask agrees with golden/pages/*.binary.png on >= 99.9% of pixels', () => {
-      const { binary, scale } = binarize(gray)
+      const { binary, scale } = binarize(rgbToGray(rgb))
       expect(scale).toBe(page.scale)
       const want = loadPngChannel(join(SPEC, 'golden/pages', `${stem(page.file)}.binary.png`))
       expect([binary.width, binary.height]).toEqual([want.width, want.height])
@@ -40,42 +42,63 @@ for (const page of golden<Page[]>('pages.json')) {
       expect(agree / want.data.length).toBeGreaterThanOrEqual(0.999)
     })
 
-    it('same angle and pitch; >= 90% of golden boxes matched at IoU >= 0.9', () => {
+    it('same angle and pitch; >= 90% of golden boxes matched at IoU >= 0.9, in order', () => {
       const t0 = performance.now()
-      const seg = segmentPage(gray)
+      const seg = segmentPage(rgb)
       console.info(`${stem(page.file)}: segmented in ${Math.round(performance.now() - t0)} ms, ${seg.boxes.length} lines`)
       expect(seg.angle).toBe(page.angle)
       expect(seg.pitch).toBe(page.pitch)
       const matched = page.boxes.filter((g) => seg.boxes.some((b) => iou(g, b) >= 0.9)).length
-      expect(matched / page.boxes.length).toBeGreaterThanOrEqual(0.9)
-      // reading order: the golden order should be reproduced box for box
+      expect(matched / Math.max(1, page.boxes.length)).toBeGreaterThanOrEqual(0.9)
       const exact = page.boxes.filter((g, i) => seg.boxes[i] && iou(g, seg.boxes[i]) >= 0.9).length
-      expect(exact / page.boxes.length).toBeGreaterThanOrEqual(0.9)
+      expect(exact / Math.max(1, page.boxes.length)).toBeGreaterThanOrEqual(0.9)
+      // the boxes refer to the deskewed page, which holds them all
+      for (const b of seg.boxes) {
+        expect(b.x + b.w).toBeLessThanOrEqual(seg.deskewed.width)
+        expect(b.y + b.h).toBeLessThanOrEqual(seg.deskewed.height)
+      }
     })
   })
 }
 
 describe('geometry helpers', () => {
-  it('maps a deskewed box back onto the original image', () => {
-    const b = { x: 100, y: 200, w: 300, h: 40 }
-    expect(toOriginal(b, 0, 1000, 800)).toEqual(b)
-    const r = toOriginal(b, 2, 1000, 800)
-    // the rotated box's bound contains the box's centre mapped back and is a little larger
-    expect(r.w).toBeGreaterThan(b.w)
-    expect(r.h).toBeGreaterThan(b.h)
-    const a = (2 * Math.PI) / 180
-    const X = 250 - 500
-    const Y = 220 - 400
-    const cx = Math.cos(a) * X - Math.sin(a) * Y + 500
-    const cy = Math.sin(a) * X + Math.cos(a) * Y + 400
-    expect(cx).toBeGreaterThan(r.x)
-    expect(cx).toBeLessThan(r.x + r.w)
-    expect(cy).toBeGreaterThan(r.y)
-    expect(cy).toBeLessThan(r.y + r.h)
-  })
   it('pads and clamps crop rectangles', () => {
     expect(cropRect({ x: 10, y: 10, w: 100, h: 50 }, 1000, 1000)).toEqual({ x: 8, y: 4, w: 104, h: 62 })
     expect(cropRect({ x: 0, y: 0, w: 100, h: 50 }, 102, 55)).toEqual({ x: 0, y: 0, w: 102, h: 55 })
+  })
+  it('expanded canvas holds the rotated page; nearest rotation keeps the centre', () => {
+    expect(expandedSize(100, 50, 0)).toEqual({ width: 100, height: 50 })
+    // cos(90 deg) is 6e-17, so ceil/floor widen it by 2, exactly as the reference's expanded_size
+    expect(expandedSize(100, 50, 90)).toEqual({ width: 52, height: 100 })
+    const e = expandedSize(1000, 600, 20)
+    const half = 500 * Math.cos(Math.PI / 9) + 300 * Math.sin(Math.PI / 9)
+    expect(e.width).toBe(Math.ceil(half) - Math.floor(-half))
+    // matches reference.rotate_nearest_expand on the same 21 x 11 mask
+    const m = { data: new Uint8Array(21 * 11), width: 21, height: 11 }
+    m.data[5 * 21 + 10] = 255
+    m.data[2 * 21 + 3] = 255
+    const r = rotateNearestExpand(m, 30)
+    expect([r.width, r.height]).toEqual([24, 22])
+    const on: Array<[number, number]> = []
+    r.data.forEach((v, i) => v && on.push([Math.floor(i / r.width), i % r.width]))
+    expect(on).toEqual([
+      [11, 11],
+      [12, 4],
+    ])
+  })
+  it('a page without ink stays level in the wide skew search', () => {
+    const blank = { data: new Uint8Array(400 * 300), width: 400, height: 300 }
+    expect(estimateSkewWide(blank)).toEqual({ angle: 0, score: 0 })
+  })
+  it('rot90 turns counter-clockwise as displayed', () => {
+    // 3 wide x 2 tall: [a b c / d e f] -> 2 wide x 3 tall: [c f / b e / a d]
+    const img = { data: Uint8Array.of(1, 2, 3, 4, 5, 6), width: 3, height: 2 }
+    const r = rot90(img, 1)
+    expect([r.width, r.height]).toEqual([2, 3])
+    expect([...r.data]).toEqual([3, 6, 2, 5, 1, 4])
+    expect([...rot90(img, 2).data]).toEqual([6, 5, 4, 3, 2, 1])
+    expect([...rot90(img, 3).data]).toEqual([4, 1, 5, 2, 6, 3])
+    expect(rot90(rot90(img, 1), 3).data).toEqual(img.data)
   })
 })
 

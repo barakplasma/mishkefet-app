@@ -6,8 +6,9 @@
  * tools/model/golden.py:
  *   - every fixture line read with TTA 3: mean CER against lines.json "read" <= 0.02
  *     (also reported: log-prob drift against golden/logprobs, beam TTA 1, stroke reads)
- *   - each page segmented and read: same angle, mean CER of its lines against
- *     pages.json <= 0.05 (page1 is deskewed by -1 degree, page2 is not)
+ *   - each page read in full (paper crop, quarter turns, wide deskew, straightening):
+ *     same paper (2 px), turns and angle; mean line CER against pages.json "read" <= 0.05
+ *     with the same line count, or <= 0.08 and +-3 lines for turned-tilted and screenshot
  *   - trainer timing for a 40-sample round (40 x 2 views x 60 frames, 100 steps)
  *
  *   MK_MODEL_DIR=~/.cache/mishkefet/models/16380452 npm run test:golden
@@ -132,20 +133,33 @@ async function main() {
   console.log(`info stroke renders: greedy read identical on ${strokeSame}/${strokes.sets.length}`)
 
   // ------------------------------------------------------------ pages
-  const pages = golden('pages.json') as Array<{ file: string; angle: number; boxes: unknown[]; lines: string[] }>
+  // The full read: paper crop, quarter turns (model vote), wide deskew, straightened lines.
+  type GoldenRead = { paper: number[] | null; turns: number; angle: number; deskewed: [number, number]; boxes: unknown[]; lines: string[] }
+  const pages = golden('pages.json') as Array<{ file: string; read: GoldenRead }>
+  // pages built for this repo to exercise turning, tilt and screenshots get a looser line gate
+  const loose = (f: string) => /turned-tilted|screenshot/.test(f)
   for (const page of process.env.MK_SKIP_PAGES ? [] : pages) {
     const rgba = await loadRgba(join(SPEC, 'fixtures', page.file))
+    const g = page.read
     t = performance.now()
     let segMs = 0
     const res = await readPage(engine, { rgba: rgba.data, width: rgba.width, height: rgba.height }, { tta: 3 }, { onSegmented: () => (segMs = performance.now() - t) })
     const total = performance.now() - t
-    const n = Math.min(res.lines.length, page.lines.length)
+    const got = res.lines.map((l) => l.text)
+    const n = Math.min(got.length, g.lines.length)
     let sum = 0
-    for (let i = 0; i < n; i++) sum += cer(page.lines[i], res.lines[i].text)
-    sum += Math.abs(res.lines.length - page.lines.length) // a missing or extra line counts as 100%
-    const mean = sum / Math.max(res.lines.length, page.lines.length)
-    const msg = `${page.file}: angle ${res.seg.angle} (golden ${page.angle}), ${res.lines.length}/${page.lines.length} lines, segmentation ${Math.round(segMs)} ms, total ${(total / 1000).toFixed(1)} s, mean line CER ${(mean * 100).toFixed(2)}%`
-    check(mean <= 0.05 && res.seg.angle === page.angle, `${msg} (<= 5%)`)
+    for (let i = 0; i < n; i++) sum += cer(g.lines[i], got[i])
+    sum += Math.abs(got.length - g.lines.length) // a missing or extra line counts as 100%
+    const mean = sum / Math.max(got.length, g.lines.length, 1)
+    const paper = res.paper ? [res.paper.x, res.paper.y, res.paper.w, res.paper.h] : null
+    const paperOk = !paper === !g.paper && (!paper || paper.every((v, i) => Math.abs(v - g.paper![i]) <= 2))
+    const size = [res.seg.deskewed.width, res.seg.deskewed.height]
+    const limit = loose(page.file) ? 0.08 : 0.05
+    const countOk = Math.abs(got.length - g.lines.length) <= (loose(page.file) ? 3 : 0)
+    check(
+      paperOk && res.turns === g.turns && res.seg.angle === g.angle && countOk && mean <= limit,
+      `${page.file}: paper ${JSON.stringify(paper)}, turns ${res.turns}/${g.turns}, angle ${res.seg.angle}/${g.angle}, deskewed ${size.join('x')}/${g.deskewed.join('x')}, ${got.length}/${g.lines.length} lines, orient+segment ${Math.round(segMs)} ms, total ${(total / 1000).toFixed(1)} s, mean line CER ${(mean * 100).toFixed(2)}% (<= ${limit * 100}%)`,
+    )
   }
 
   // ------------------------------------------------------------ trainer

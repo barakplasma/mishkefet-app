@@ -24,16 +24,32 @@ running windows (van Herk / Gil-Werman makes those O(1) per pixel).
      sigma = 0.3*((block-1)*0.5 - 1) + 0.8))` with border **replicate**.
    - `binary = 255 where flat - mean <= -12 else 0`.
    - `binary = open(binary, ones 2x2)`.
-2. **estimate_skew(binary)**: `small` = area resize to `round(w/2) x round(h/2)`
-   with source-per-destination 2. For `angle = -6 + 0.5*i`, `i = 0..24`: rotate
-   `small` (nearest, see below), `profile = row sums` (double), score =
-   population variance of `diff(profile)`. First strictly best angle wins.
+2. **estimate_skew_wide(binary)** returns `(angle, score)`.
+   - `stripe(img, a)`: rotate `img` by `a` (nearest, step 3), row sums, divided by
+     `255 * width(img)`; population variance of their first differences.
+   - Coarse: `q` = area resize to `round(w/4) x round(h/4)` (source-per-destination 4);
+     the first best `stripe(q, a)` over `a = -44, -42, ..., 44`.
+   - If every coarse score is equal (a page without ink), `angle = 0` and stop.
+   - If `|coarse| <= 6`: `angle` = the original search below. Else: `half` = area resize to
+     `round(w/2) x round(h/2)` (source-per-destination 2), and `angle` = the first best
+     `stripe(half, a)` over `a = coarse - 2 + 0.5 i`, `i = 0..8`.
+   - `score = stripe(half, angle)` (used by [orientation.md](orientation.md)).
+   - Original search (`estimate_skew`): `small` = area resize to `round(w/2) x round(h/2)`
+     with source-per-destination 2. For `angle = -6 + 0.5*i`, `i = 0..24`: rotate `small`
+     (nearest), `profile = row sums` (double), score = population variance of `diff(profile)`.
+     First strictly best angle wins. (Pages within 6 degrees deskew exactly as hebocr did.)
 3. **rotation**: `M = [[c, s, (1-c)*cx - s*cy], [-s, c, s*cx + (1-c)*cy]]`, `c = cos(angle)`,
    `s = sin(angle)`, `cx = w/2`, `cy = h/2`, angle in degrees (positive is
    counter-clockwise on screen). Destination pixel `(x, y)` samples source
-   `floor(Minv * (x, y) + 0.5)`; out of bounds is 0. If `|angle| > 1e-3`, rotate
-   the binary mask this way and the original RGB the same way with bicubic
-   sampling and white fill (platform rotation is fine for RGB: it only feeds crops).
+   `floor(Minv * (x, y) + 0.5)`; out of bounds is 0.
+   - `|angle| <= 6` (and `> 1e-3`): same canvas, as above, for the binary mask and the RGB.
+   - `|angle| > 6`: an **expanded canvas** that holds the whole rotated page:
+     rotate the four corners `(0,0) (w,0) (w,h) (0,h)` about `(w/2, h/2)` with
+     `x' = c dx + s dy`, `y' = -s dx + c dy`; `W' = ceil(max x') - floor(min x')`, same for `H'`.
+     Destination `(x, y)` samples source `(c X - s Y + w/2, s X + c Y + h/2)` rounded as above,
+     with `X = x - W'/2`, `Y = y - H'/2`. The RGB is rotated onto its own expanded canvas
+     (computed from its own size) with bicubic or bilinear sampling, white outside.
+   - Boxes and crops refer to the rotated (deskewed) page, which is what gets stored.
 4. **estimate_line_pitch(binary)**: `prof = row sums - mean` (double). If all
    zero: 30. `lo = max(8, trunc(0.004 n))`, `hi = min(n - 1, n // 2)`; if
    `hi <= lo + 2`: 30. `win[k] = sum_t prof[t] * prof[t + lag]` for `lag = lo..hi-1`.
@@ -56,8 +72,13 @@ running windows (van Herk / Gil-Werman makes those O(1) per pixel).
 6. Re-estimate the pitch on the cleaned mask.
 7. **find_lines**: `sx = max(8, trunc(0.55p))`, `sy = max(1, trunc(0.05p))`.
    `dilate(sx wide x sy tall)`, then `close(sx wide x 1)`. 8-connected components;
-   keep a component's bounding box unless `w < 0.8p`, `h < 0.25p`, `h > 12p`, or
-   pixel count `< 0.12 p^2`.
+   keep a component's bounding box unless `w < 0.8p`, `h < 0.25p`, or pixel count
+   `< 0.12 p^2`, or it is `h > 12p` **and** its pixel count is under 35% of its box
+   area (`count / (w*h) < 0.35`).
+   **Deviation from hebocr:** hebocr dropped every component taller than `12p` as a
+   box outline. On dense notes whole paragraphs smear into one tall component and
+   disappeared with it (a graph-paper page read as 3 lines); outlines are mostly
+   empty, text blocks are not. Identical on all 10 benchmark pages.
 8. **split_tall**: for a box with `n = round(h / p) > 1` (half to even): `prof` = row
    sums of the box in the cleaned mask, smoothed vertically by `[1,4,6,4,1]/16`
    (reflect101). Cuts: start `[0]`; for `k = 1..n-1`: `centre = trunc(k h / n)`,

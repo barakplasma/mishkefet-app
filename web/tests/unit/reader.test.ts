@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { HeadData, LineBox } from '../../src/engine/api.ts'
-import { CancelledError, readLine, readPage, readStrokes, transcript, type Engine } from '../../src/engine/reader.ts'
+import { CancelledError, readBoxes, readLine, readPage, readStrokes, transcript, type Engine } from '../../src/engine/reader.ts'
 import { charset, golden } from './fixtures.ts'
 import { loadGray, loadRgba } from './images.ts'
 import { SPEC } from './paths.ts'
@@ -47,30 +47,40 @@ describe('reader with a stub backbone', () => {
     expect(r3.confidence).toBe(r1.confidence)
   })
 
-  it('segments a page, reports boxes in the original grid, then every line', async () => {
+  it('segments a page, reports the deskewed page and its boxes, then every line; readBoxes re-reads them in order', async () => {
     const e = stubEngine()
     const page = await loadRgba(join(SPEC, 'fixtures/pages/page1.jpg'))
-    const want = golden<Array<{ boxes: LineBox[] }>>('pages.json')[0]
-    let boxes: LineBox[] = []
-    const seen: number[] = []
+    const want = golden<Array<{ file: string; boxes: LineBox[] }>>('pages.json').find((p) => p.file.endsWith('page1.jpg'))!
+    let seen: { turns: number; boxes: LineBox[]; width: number; height: number } | null = null
+    const lineIdx: number[] = []
     const res = await readPage(e, { rgba: page.data, width: page.width, height: page.height }, { tta: 1, mode: 'greedy' }, {
-      onSegmented: (_s, b) => (boxes = b),
+      onSegmented: ({ turns, seg }) => (seen = { turns, boxes: seg.boxes, width: seg.deskewed.width, height: seg.deskewed.height }),
       onLine: (i, total) => {
-        expect(total).toBe(want.boxes.length)
-        seen.push(i)
+        expect(total).toBe(seen!.boxes.length)
+        lineIdx.push(i)
       },
     })
+    expect(seen).not.toBeNull()
+    expect(res.paper).toBeNull()
     expect(res.seg.angle).toBe(-1)
-    expect(boxes.length).toBe(want.boxes.length)
-    expect(seen).toEqual(boxes.map((_, i) => i))
-    expect(res.lines.map((l) => l.box)).toEqual(boxes)
-    for (const b of boxes) {
-      expect(b.x).toBeGreaterThanOrEqual(0)
-      expect(b.y).toBeGreaterThanOrEqual(0)
-      expect(b.x + b.w).toBeLessThanOrEqual(page.width)
-      expect(b.y + b.h).toBeLessThanOrEqual(page.height)
+    expect(seen!.boxes.length).toBe(want.boxes.length)
+    expect(lineIdx).toEqual(seen!.boxes.map((_, i) => i))
+    expect(res.lines.map((l) => l.box)).toEqual(seen!.boxes)
+    for (const b of seen!.boxes) {
+      expect(b.x + b.w).toBeLessThanOrEqual(seen!.width)
+      expect(b.y + b.h).toBeLessThanOrEqual(seen!.height)
     }
     expect(transcript(res.lines).length).toBeLessThanOrEqual(res.lines.length)
+    // re-reading the stored deskewed page by box gives the same lines, paired by box
+    const d = res.seg.deskewed
+    const rgba = new Uint8ClampedArray(d.width * d.height * 4)
+    for (let i = 0; i < d.width * d.height; i++) {
+      rgba.set(d.data.subarray(i * 3, i * 3 + 3), i * 4)
+      rgba[i * 4 + 3] = 255
+    }
+    const some = res.seg.boxes.slice(0, 6)
+    const again = await readBoxes(e, { rgba, width: d.width, height: d.height }, some, { tta: 1, mode: 'greedy' })
+    expect(again).toEqual(res.lines.slice(0, 6))
   })
 
   it('stops between lines when cancelled', async () => {

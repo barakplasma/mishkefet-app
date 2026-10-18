@@ -281,8 +281,8 @@ final class AppModel {
         }
         let boxes = scan.lines.compactMap(\.box)
         if boxes.isEmpty {
-            let r = try await engine.readPage(image, head: head, onSegmented: { _, _ in }, onLine: { _, _, _ in })
-            return r.lines.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            let lines = try await engine.readStoredPage(image, head: head)
+            return lines.filter { JobQueue.keeps($0, kind: scan.kind) }
         }
         return try await engine.readLines(of: image, boxes: boxes, head: head)
     }

@@ -117,7 +117,7 @@ final class JobQueue {
 
         let id = UUID()
         let now = Date()
-        let kept = lines.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let kept = lines.filter { Self.keeps($0, kind: kind) }
         let imageName = "\(id.uuidString).jpg", thumbName = "\(id.uuidString)-thumb.jpg"
         let saved = await Task.detached(priority: .userInitiated) { [page] () -> Bool in
             guard let jpg = Images.jpeg(page), let thumb = Images.thumbnail(page) else { return false }
@@ -142,6 +142,15 @@ final class JobQueue {
         print("MISHKEFET_DONE \(kept.count)")
         #endif
         return id
+    }
+
+    /// Whether a read line goes into the stored reading: not blank, and on pages not a ruling or
+    /// binding fragment (at most 3 characters besides spaces, read with all-frame confidence below 0.9).
+    nonisolated static func keeps(_ line: LineResult, kind: ScanKind) -> Bool {
+        let text = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { return false }
+        if kind != .line, text.filter({ $0 != " " }).count <= 3, line.confidence < 0.9 { return false }
+        return true
     }
 
     private func beginBackgroundTask() {

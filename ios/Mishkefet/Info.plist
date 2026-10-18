@@ -33,6 +33,8 @@
 	<false/>
 	<key>NSCameraUsageDescription</key>
 	<string>משקפת מצלמת דפים כדי לקרוא כתב יד. התמונות והקריאות נשארות במכשיר בלבד.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>משקפת שומרת בתמונות את הדפים שסרקתם, רק כשתבקשו.</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>Karantina-Regular.ttf</string>

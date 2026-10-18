@@ -74,6 +74,13 @@ export function pairLines(before: LineResult[], after: LineResult[]): Array<[str
   return pairs
 }
 
+/** Lines worth keeping in a page's transcript (spec/decoder.md, Page). */
+export function keepLine(l: LineResult): boolean {
+  const t = l.text.trim()
+  if (!t) return false
+  return t.replace(/\s+/g, '').length > 3 || l.confidence >= 0.9
+}
+
 const MONTHS = ['בינואר', 'בפברואר', 'במרץ', 'באפריל', 'במאי', 'ביוני', 'ביולי', 'באוגוסט', 'בספטמבר', 'באוקטובר', 'בנובמבר', 'בדצמבר']
 
 export function dateLabel(ms: number, now = Date.now()): string {

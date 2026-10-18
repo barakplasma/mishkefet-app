@@ -5,6 +5,13 @@
 
 import type { Backend, HeadData, LineBox, LineResult, Reply, Request, Stroke, TrainView } from '../engine/api.ts'
 
+export interface PreparedPage {
+  boxes: LineBox[]
+  angle: number
+  turns: number
+  image: { rgba: Uint8ClampedArray; width: number; height: number }
+}
+
 export interface ModelState {
   phase: 'idle' | 'loading' | 'ready' | 'error'
   loaded: number
@@ -134,20 +141,30 @@ export class EngineClient {
     return r.type === 'done' ? r.lines[0] : { text: '', confidence: 0 }
   }
 
-  /** Streams segmentation and each line; resolves with every line. */
+  /**
+   * Streams the prepared page (paper crop, upright, deskewed: the image the boxes
+   * refer to and the one to store) and each line; resolves with every line.
+   */
   readPage(
     rgba: ImageData,
     head: HeadData | undefined,
-    on: { segmented?: (boxes: LineBox[], angle: number) => void; line?: (index: number, total: number, r: LineResult) => void },
+    on: { segmented?: (page: PreparedPage) => void; line?: (index: number, total: number, r: LineResult) => void },
   ): { done: Promise<LineResult[]>; cancel: () => void } {
     const id = this.nextId
     const done = this.load().then(() =>
       this.call({ type: 'readPage', rgba: rgba.data, width: rgba.width, height: rgba.height, head, tta: this.tta }, ['done'], (r) => {
-        if (r.type === 'segmented') on.segmented?.(r.boxes, r.angle)
+        if (r.type === 'segmented') on.segmented?.({ boxes: r.boxes, angle: r.angle, turns: r.turns, image: r.image })
         if (r.type === 'line') on.line?.(r.index, r.total, r.result)
       }),
     ).then((r) => (r.type === 'done' ? r.lines : []))
     return { done, cancel: () => this.post({ id: this.nextId++, type: 'cancel', target: id }) }
+  }
+
+  /** Reads given boxes of an already prepared page, one result per box in order (re-reads). */
+  async readBoxes(rgba: ImageData, boxes: LineBox[], head?: HeadData): Promise<LineResult[]> {
+    await this.load()
+    const r = await this.call({ type: 'readBoxes', rgba: rgba.data, width: rgba.width, height: rgba.height, boxes, head, tta: this.tta }, ['done'])
+    return r.type === 'done' ? r.lines : []
   }
 
   async readStrokes(strokes: Stroke[], word: string, head?: HeadData): Promise<string> {

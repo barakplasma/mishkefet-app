@@ -1,4 +1,5 @@
 import MishkefetCore
+import Photos
 import SwiftUI
 import UIKit
 
@@ -167,6 +168,14 @@ private struct ResultContent: View {
                     .animation(.easeInOut(duration: 0.3), value: copied)
             }
             .buttonStyle(PressStyle())
+            Button { saveImage() } label: {
+                Icon(glyph: .download, size: 22, lineWidth: 1.9)
+                    .foregroundStyle(Mk.ink)
+                    .frame(width: 58, height: 58)
+                    .background(Circle().fill(Mk.card))
+            }
+            .buttonStyle(PressStyle(scale: 0.94))
+            .accessibilityLabel("שמירת התמונה לתמונות")
             Button { share(lines) } label: {
                 Icon(glyph: .share, size: 22, lineWidth: 1.9)
                     .foregroundStyle(Mk.ink)
@@ -202,6 +211,23 @@ private struct ResultContent: View {
         copyTask = Task {
             try? await Task.sleep(for: .seconds(1.6))
             if !Task.isCancelled { copied = false }
+        }
+    }
+
+    /// Saves the scanned picture to Photos (add-only access). After a refusal it stays
+    /// silent, as App Review asked of the camera prompt in Ozen.
+    private func saveImage() {
+        let url = scan.imageURL
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            guard status == .authorized || status == .limited else { return }
+            PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url)
+            } completionHandler: { ok, _ in
+                Task { @MainActor in
+                    app.showToast(ok ? "התמונה נשמרה בתמונות" : "לא הצלחתי לשמור את התמונה")
+                    if ok { UINotificationFeedbackGenerator().notificationOccurred(.success) }
+                }
+            }
         }
     }
 

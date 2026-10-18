@@ -1,7 +1,8 @@
 /**
  * Reading (spec/decoder.md "Reading a line", "Page"): crop to features to
- * log-probabilities to text, with TTA selection, plus page and stroke reads.
- * Shared by the worker and the Node golden script.
+ * log-probabilities to text, with straightening and TTA selection, plus
+ * page (paper crop, quarter turns, deskew, segmentation), box and stroke
+ * reads. Shared by the worker and the Node golden script.
  */
 
 import type { HeadData, LineResult, Stroke } from './api.ts'
@@ -9,11 +10,13 @@ import { labelsToText, textToLabels, type Charset } from './charset.ts'
 import { TTA_SCALES } from './constants.ts'
 import { beamSearch, confidence, greedy, type LogProbs } from './decoder.ts'
 import { applyHead } from './head.ts'
-import { rgbaToRgb, rgbToGray, type Gray } from './image.ts'
+import { rgbaToRgb, type Gray, type Rect, type Rgb } from './image.ts'
 import type { CharLM, WordLM } from './lm.ts'
 import type { Backbone, Features } from './model.ts'
+import { cropToPaper, findPaper, orientPage } from './orientation.ts'
 import { preprocess, ttaView } from './preprocess.ts'
-import { lineCrop, segmentPage, toOriginal, type Segmentation } from './segmenter.ts'
+import { lineCrop, type Box, type Segmentation } from './segmenter.ts'
+import { straightenLine } from './straighten.ts'
 import { augmentParams, renderStrokes } from './strokes.ts'
 
 export interface Engine {
@@ -46,16 +49,20 @@ export interface ReadOptions {
   tta?: number
   head?: HeadData
   mode?: 'beam' | 'greedy'
+  /** Straighten the crop first (default). Canvas renders skip it: they are straight already. */
+  straighten?: boolean
 }
 
 /**
- * One line crop. With TTA > 1, keeps the first view with the strictly highest
- * emitting-frame confidence (blank reads score -inf); the stored confidence is
- * the all-frame confidence of the scale-1.0 view.
+ * One line crop: straightened (usually a no-op), then with TTA > 1 the first
+ * view with the strictly highest emitting-frame confidence wins (blank reads
+ * score -inf); the stored confidence is the all-frame confidence of the
+ * scale-1.0 view.
  */
-export async function readLine(engine: Engine, gray: Gray, opts: ReadOptions = {}): Promise<LineResult> {
+export async function readLine(engine: Engine, crop: Gray, opts: ReadOptions = {}): Promise<LineResult> {
   const tta = Math.max(1, Math.min(opts.tta ?? 3, TTA_SCALES.length))
   const head = opts.head ?? engine.baseHead
+  const gray = opts.straighten === false ? crop : straightenLine(crop)
   let bestText = ''
   let bestScore = -Infinity
   let baseConf = 0
@@ -74,41 +81,74 @@ export async function readLine(engine: Engine, gray: Gray, opts: ReadOptions = {
   return { text: bestText, confidence: baseConf }
 }
 
+/** A page image as it crosses the worker boundary (canvas RGBA). */
+export interface RgbaImage {
+  rgba: ArrayLike<number>
+  width: number
+  height: number
+}
+
+export interface PageResult {
+  /** The paper crop in the input image, when it was a screenshot-like frame. */
+  paper: Rect | null
+  /** Quarter turns counter-clockwise that made the page upright. */
+  turns: number
+  /** Segmentation of the upright page; boxes refer to `seg.deskewed`. */
+  seg: Segmentation
+  /** One result per box, in reading order, blank texts included. */
+  lines: LineResult[]
+}
+
 export interface PageHooks {
-  onSegmented?: (seg: Segmentation, boxes: Array<{ x: number; y: number; w: number; h: number }>) => void
+  onSegmented?: (page: Omit<PageResult, 'lines'>) => void
   onLine?: (index: number, total: number, result: LineResult) => void
-  /** Checked between lines; return true to stop with a CancelledError. */
+  /** Checked between stages and lines; return true to stop with a CancelledError. */
   shouldStop?: () => boolean
 }
 
-/**
- * Segment and read a page. Boxes in the results are in the original image's
- * pixel grid. Every line is returned, in reading order and one per box; the
- * transcript is the lines whose text is not blank (`transcript`).
- */
-export async function readPage(
-  engine: Engine,
-  page: { rgba: ArrayLike<number>; width: number; height: number },
-  opts: ReadOptions = {},
-  hooks: PageHooks = {},
-): Promise<{ seg: Segmentation; lines: LineResult[] }> {
-  const rgb = rgbaToRgb(page.rgba, page.width, page.height)
-  const gray = rgbToGray(rgb)
-  const stop = () => {
-    if (hooks.shouldStop?.()) throw new CancelledError()
+/** The orientation vote's reader: greedy single view with the general head, emitting confidence. */
+function voteScore(engine: Engine) {
+  return async (gray: Gray) => {
+    const f = await grayFeatures(engine, gray)
+    return confidence(applyHead(f.values, f.frames, engine.baseHead), true)
   }
-  const seg = segmentPage(gray, { checkpoint: stop })
-  const boxes = seg.boxes.map((b) => toOriginal(b, seg.angle, gray.width, gray.height))
-  hooks.onSegmented?.(seg, boxes)
+}
+
+/** Read each box of a page (padded crop, straightened, TTA), in order. */
+async function readCrops(engine: Engine, page: Rgb, boxes: readonly Box[], opts: ReadOptions, hooks: PageHooks): Promise<LineResult[]> {
   const lines: LineResult[] = []
-  for (let i = 0; i < seg.boxes.length; i++) {
-    stop()
-    const r = await readLine(engine, lineCrop(gray, seg.angle, seg.boxes[i], rgb), opts)
-    const result = { ...r, box: boxes[i] }
-    hooks.onLine?.(i, seg.boxes.length, result)
+  for (let i = 0; i < boxes.length; i++) {
+    if (hooks.shouldStop?.()) throw new CancelledError()
+    const r = await readLine(engine, lineCrop(page, boxes[i]), opts)
+    const result = { ...r, box: { ...boxes[i] } }
+    hooks.onLine?.(i, boxes.length, result)
     lines.push(result)
   }
-  return { seg, lines }
+  return lines
+}
+
+/**
+ * Read a page: crop to the paper (screenshots), turn it upright, deskew and
+ * segment, then read every line. Boxes are in the upright deskewed page
+ * (`seg.deskewed`), which is what the UI stores and shows.
+ */
+export async function readPage(engine: Engine, image: RgbaImage, opts: ReadOptions = {}, hooks: PageHooks = {}): Promise<PageResult> {
+  const checkpoint = () => {
+    if (hooks.shouldStop?.()) throw new CancelledError()
+  }
+  const rgb = rgbaToRgb(image.rgba, image.width, image.height)
+  const paper = findPaper(rgb)
+  checkpoint()
+  const { turns, seg } = await orientPage(cropToPaper(rgb, paper), voteScore(engine), { checkpoint })
+  hooks.onSegmented?.({ paper, turns, seg })
+  const lines = await readCrops(engine, seg.deskewed, seg.boxes, opts, hooks)
+  return { paper, turns, seg, lines }
+}
+
+/** Re-read given boxes of an (already deskewed) page: one result per box, in order. */
+export async function readBoxes(engine: Engine, image: RgbaImage, boxes: readonly Box[], opts: ReadOptions = {}, hooks: PageHooks = {}): Promise<LineResult[]> {
+  const rgb = rgbaToRgb(image.rgba, image.width, image.height)
+  return readCrops(engine, rgb, boxes, opts, hooks)
 }
 
 /** The lines that make it into a page's text: blank reads dropped, nothing else. */
@@ -125,7 +165,7 @@ export function renderWord(strokes: readonly Stroke[], word: string, seed = 0): 
 export async function readStrokes(engine: Engine, strokes: readonly Stroke[], word: string, head?: HeadData): Promise<string> {
   const g = renderWord(strokes, word)
   if (!g) return ''
-  return (await readLine(engine, g, { tta: 1, head })).text
+  return (await readLine(engine, g, { tta: 1, head, straighten: false })).text
 }
 
 export function labelsFor(engine: Engine, text: string): number[] {

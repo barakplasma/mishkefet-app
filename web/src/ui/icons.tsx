@@ -102,3 +102,11 @@ export function TrashIcon() {
     </svg>
   )
 }
+
+export function DownloadIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} {...round} aria-hidden="true">
+      <path d="M12 4v10M7.5 9.5L12 14l4.5-4.5M5 15v4h14v-4" />
+    </svg>
+  )
+}

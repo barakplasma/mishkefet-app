@@ -1,3 +1,4 @@
 /* Hebrew is the app's language. */
 "CFBundleDisplayName" = "משקפת";
 "NSCameraUsageDescription" = "משקפת מצלמת דפים כדי לקרוא כתב יד. התמונות והקריאות נשארות במכשיר בלבד.";
+"NSPhotoLibraryAddUsageDescription" = "משקפת שומרת בתמונות את הדפים שסרקתם, רק כשתבקשו.";

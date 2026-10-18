@@ -79,7 +79,7 @@ final class SegmenterTests: XCTestCase {
     func testBlankPage() {
         let r = Segmenter.segment(GrayImage(width: 300, height: 400, fill: 250))
         XCTAssertTrue(r.boxes.isEmpty)
-        // Every skew score ties at 0 and the first angle wins, as in the reference.
-        XCTAssertEqual(r.angle, -6)
+        // Every stripe score ties: a page without ink stays level.
+        XCTAssertEqual(r.angle, 0)
     }
 }

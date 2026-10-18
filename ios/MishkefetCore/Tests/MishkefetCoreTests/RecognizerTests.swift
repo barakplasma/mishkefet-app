@@ -36,31 +36,43 @@ final class RecognizerTests: XCTestCase {
             let golden = try Fixtures.readFloat32LE(Fixtures.goldenFile("logprobs/\(Fixtures.stem(line.file)).f32"))
             let maxDiff = zip(lp, golden).map { abs($0 - $1) }.max() ?? 0
             XCTAssertLessThan(maxDiff, 0.5, line.file)
-            let one = try await r.readLine(g, head: nil, tta: 1)
-            cers.append(Metrics.cer(hyp: one.text, ref: line.beam))
+            // golden beam is on the crop as given (no straightening)
+            let beam = await r.decode(logprobs: lp, frames: f.frames, beam: true)
+            cers.append(Metrics.cer(hyp: beam, ref: line.beam))
         }
         print(String(format: "tta 1 beam: mean CER %.4f vs golden", cers.reduce(0, +) / Double(cers.count)))
     }
 
-    private func readPage2(_ img: CGImage, label: String) async throws -> Double {
+    /// Full read of a fixture page against pages.json `read`; returns the mean line CER.
+    @discardableResult
+    private func readPage(_ img: CGImage, golden page: Fixtures.Page, label: String, exactBoxes: Bool) async throws -> Double {
         let r = try await Fixtures.recognizer()
-        let page = try XCTUnwrap(try Fixtures.pages().first { $0.file.hasSuffix("page2.jpg") })
         let t0 = DispatchTime.now()
         let res = try await r.readPage(img, head: nil, tta: 3, onLine: nil)
         let ms = Fixtures.ms(t0)
-        XCTAssertEqual(res.segmentation.angle, page.angle)
-        XCTAssertNotNil(res.segmentation.deskewed)
-        XCTAssertEqual(res.segmentation.boxes, page.boxes)
-        XCTAssertEqual(res.lines.count, page.lines.count)
-        XCTAssertEqual(res.lines.map(\.box), res.segmentation.boxes.map { Optional($0) })
-        let n = min(res.lines.count, page.lines.count)
-        let cers = (0..<n).map { Metrics.cer(hyp: res.lines[$0].text, ref: page.lines[$0]) }
-        for i in 0..<n where cers[i] > 0 {
-            print("  line \(i) cer \(String(format: "%.3f", cers[i]))\n    got  \(res.lines[i].text)\n    want \(page.lines[i])")
+        let g = page.read
+        let seg = res.segmentation
+        XCTAssertEqual(seg.angle, g.angle, label)
+        let deskewed = try XCTUnwrap(seg.deskewed)
+        XCTAssertEqual([deskewed.width, deskewed.height], g.deskewed, label)
+        if exactBoxes {
+            XCTAssertEqual(seg.boxes, g.boxes, label)
+        } else {
+            XCTAssertLessThanOrEqual(abs(seg.boxes.count - g.boxes.count), 3, label)
         }
-        let mean = cers.reduce(0, +) / Double(max(n, 1))
-        print(String(format: "page2 read (%@): %d lines, %d identical, mean CER %.4f vs golden, %.0f ms",
-                     label, res.lines.count, cers.filter { $0 == 0 }.count, mean, ms))
+        XCTAssertEqual(res.lines.map(\.box), seg.boxes.map { Optional($0) })
+        // pair lines by box (IoU), so a box more or less does not shift every pair
+        var cers: [Double] = []
+        for (i, gb) in g.boxes.enumerated() {
+            let j = seg.boxes.indices.max { Fixtures.iou(seg.boxes[$0], gb) < Fixtures.iou(seg.boxes[$1], gb) }
+            let hyp = j.flatMap { Fixtures.iou(seg.boxes[$0], gb) >= 0.5 ? res.lines[$0].text : nil } ?? ""
+            let cer = Metrics.cer(hyp: hyp, ref: g.lines[i])
+            cers.append(cer)
+            if cer > 0 { print("  line \(i) cer \(String(format: "%.3f", cer))\n    got  \(hyp)\n    want \(g.lines[i])") }
+        }
+        let mean = cers.reduce(0, +) / Double(max(cers.count, 1))
+        print(String(format: "page read %@: %d lines (golden %d), %d identical, mean CER %.4f vs golden, %.0f ms",
+                     label, res.lines.count, g.lines.count, cers.filter { $0 == 0 }.count, mean, ms))
         return mean
     }
 
@@ -68,17 +80,64 @@ final class RecognizerTests: XCTestCase {
     /// `to_gray` of page2.jpg saved losslessly): the engine alone, mean CER at most 0.05.
     func testPageReadFromReferenceGray() async throws {
         let url = Fixtures.root.appendingPathComponent("ios/MishkefetCore/Tests/Fixtures/page2-pil-gray.png")
-        let mean = try await readPage2(try Fixtures.cgImage(url), label: "reference gray")
+        let mean = try await readPage(try Fixtures.cgImage(url), golden: try Fixtures.page("page2.jpg"),
+                                      label: "page2 (reference gray)", exactBoxes: true)
         XCTAssertLessThanOrEqual(mean, 0.05)
     }
 
     /// Page 2 decoded by ImageIO, as the app does. Apple's JPEG decoder differs from libjpeg
     /// by up to 2 levels on ~2% of pixels, which flips TTA choices on a few short, noisy lines
-    /// of this out-of-domain page (measured 0.051), hence the looser bound.
+    /// of this out-of-domain page, hence the looser bound.
     func testPageReadFromJPEG() async throws {
         let img = try Fixtures.cgImage(Fixtures.fixtures.appendingPathComponent("pages/page2.jpg"))
-        let mean = try await readPage2(img, label: "ImageIO JPEG")
+        let mean = try await readPage(img, golden: try Fixtures.page("page2.jpg"), label: "page2.jpg", exactBoxes: true)
         XCTAssertLessThanOrEqual(mean, 0.08)
+    }
+
+    /// page2 turned 270 and tilted 20 degrees, from PIL's own decode (Tests/Fixtures/
+    /// turned-tilted-pil-rgb.png, turned-tilted.jpg saved losslessly): turned back, deskewed on an
+    /// expanded canvas, rotated per RGB channel. The engine alone: measured 66 of 67 lines identical.
+    func testTurnedTiltedPageReadFromReferenceDecode() async throws {
+        let url = Fixtures.root.appendingPathComponent("ios/MishkefetCore/Tests/Fixtures/turned-tilted-pil-rgb.png")
+        let mean = try await readPage(try Fixtures.cgImage(url), golden: try Fixtures.page("turned-tilted.jpg"),
+                                      label: "turned-tilted (reference decode)", exactBoxes: true)
+        XCTAssertLessThanOrEqual(mean, 0.08)
+    }
+
+    /// The same page decoded by ImageIO. Its lines are tiny (pitch 19 px) and their reads chaotic,
+    /// so the JPEG decoder difference (up to 2 levels on ~2% of pixels) changes about half of them
+    /// (measured mean CER 0.175 to 0.196), hence the looser bound.
+    func testTurnedTiltedPageRead() async throws {
+        let img = try Fixtures.cgImage(Fixtures.fixtures.appendingPathComponent("pages/turned-tilted.jpg"))
+        let mean = try await readPage(img, golden: try Fixtures.page("turned-tilted.jpg"), label: "turned-tilted.jpg",
+                                      exactBoxes: false)
+        XCTAssertLessThanOrEqual(mean, 0.25)
+    }
+
+    /// A page inside rendered app chrome: cropped to the paper first.
+    func testScreenshotPageRead() async throws {
+        let img = try Fixtures.cgImage(Fixtures.fixtures.appendingPathComponent("pages/screenshot.png"))
+        let mean = try await readPage(img, golden: try Fixtures.page("screenshot.png"), label: "screenshot.png",
+                                      exactBoxes: false)
+        XCTAssertLessThanOrEqual(mean, 0.08)
+    }
+
+    /// Paper crop and quarter turns of every fixture page match the reference.
+    func testPreparePageMatchesGolden() async throws {
+        let r = try await Fixtures.recognizer()
+        for page in try Fixtures.pages() {
+            let img = try Fixtures.cgImage(Fixtures.fixtures.appendingPathComponent(page.file))
+            let t0 = DispatchTime.now()
+            let p = try await r.preparePage(img)
+            let ms = Fixtures.ms(t0)
+            XCTAssertEqual(p.turns, page.read.turns, page.file)
+            XCTAssertEqual(p.paper == nil, page.read.paper == nil, page.file)
+            let d = try XCTUnwrap(p.segmentation.deskewed)
+            XCTAssertEqual([d.width, d.height], page.read.deskewed, page.file)
+            print(String(format: "preparePage %@: paper %@, turns %d (golden %d), angle %.1f (golden %.1f), %d boxes "
+                + "(golden %d), %.0f ms", page.file, p.paper.map { "\($0)" } ?? "none", p.turns, page.read.turns,
+                         p.segmentation.angle, page.read.angle, p.segmentation.boxes.count, page.read.boxes.count, ms))
+        }
     }
 
     func testMissingModel() {

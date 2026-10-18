@@ -130,6 +130,22 @@ public struct PageSegmentation: Sendable {
     }
 }
 
+/// A page made ready to read: cropped to the paper, turned upright, segmented.
+public struct PreparedPage: Sendable {
+    /// The paper rectangle in the input image's pixels, when the page was cropped to it.
+    public let paper: CGRect?
+    /// Quarter turns counter-clockwise (as displayed) applied after the crop.
+    public let turns: Int
+    /// Segmentation of the upright page; `deskewed` is the image to store and show.
+    public let segmentation: PageSegmentation
+
+    public init(paper: CGRect?, turns: Int, segmentation: PageSegmentation) {
+        self.paper = paper
+        self.turns = turns
+        self.segmentation = segmentation
+    }
+}
+
 /// The shipped model files, all in one directory.
 public struct ModelFiles: Sendable {
     public static let backboneName = "backbone.fp16.onnx"
