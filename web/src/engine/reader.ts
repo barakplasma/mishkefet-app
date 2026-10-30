@@ -7,7 +7,7 @@
 
 import type { HeadData, LineResult, Stroke } from './api.ts'
 import { labelsToText, textToLabels, type Charset } from './charset.ts'
-import { TTA_SCALES } from './constants.ts'
+import { TTA_SCALES, type InputSpec } from './constants.ts'
 import { beamSearch, confidence, greedy, type LogProbs } from './decoder.ts'
 import { applyHead } from './head.ts'
 import { rgbaToRgb, type Gray, type Rect, type Rgb } from './image.ts'
@@ -21,10 +21,13 @@ import { augmentParams, renderStrokes } from './strokes.ts'
 
 export interface Engine {
   charset: Charset
-  lm: CharLM
-  words: WordLM
+  /** Absent for the English model: lines are decoded greedily. */
+  lm?: CharLM
+  words?: WordLM
   backbone: Backbone
   baseHead: HeadData
+  /** Line image format the backbone expects (default: Hebrew). */
+  input?: InputSpec
 }
 
 export class CancelledError extends Error {
@@ -36,12 +39,12 @@ export class CancelledError extends Error {
 
 /** Gray crop (any size) to backbone features at the model's input width. */
 export async function grayFeatures(engine: Engine, gray: Gray): Promise<Features> {
-  const x = preprocess(gray)
+  const x = preprocess(gray, engine.input)
   return engine.backbone.features(x.data, x.width)
 }
 
 export function decode(engine: Engine, lp: LogProbs, mode: 'beam' | 'greedy' = 'beam'): string {
-  const labels = mode === 'beam' ? beamSearch(lp, engine.lm, engine.words) : greedy(lp)
+  const labels = mode === 'beam' && engine.lm && engine.words ? beamSearch(lp, engine.lm, engine.words) : greedy(lp)
   return labelsToText(engine.charset, labels)
 }
 

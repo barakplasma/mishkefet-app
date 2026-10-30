@@ -200,7 +200,7 @@ export function Result(props: {
                 <textarea dir="rtl" rows={Math.max(1, Math.ceil((draft[i]?.length ?? 0) / 32))} value={draft[i] ?? ''}
                   onChange={(e) => setDraft((d) => d.map((x, k) => (k === i ? e.target.value : x)))} />
               ) : (
-                <span className="t">{l.text}</span>
+                <span className="t" dir="auto">{l.text}</span>
               )}
             </div>
           ))}

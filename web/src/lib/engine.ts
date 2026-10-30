@@ -99,7 +99,10 @@ export class EngineClient {
     for (const fn of this.listeners) fn(this.state)
   }
 
-  /** `?backend=wasm` forces the CPU path, `?modelBase=<url>` downloads from a mirror (still SHA-256 pinned). */
+  /**
+   * `?backend=wasm` forces the CPU path, `?modelBase=<url>` downloads from a mirror (still SHA-256 pinned),
+   * `?lang=en` reads English for this visit (otherwise the saved choice, see setLang).
+   */
   load(): Promise<void> {
     if (this.loadPromise && this.state.phase !== 'error') return this.loadPromise
     const q = new URLSearchParams(location.search)
@@ -107,7 +110,7 @@ export class EngineClient {
     if (!forceWasm) gpuGuard.begin()
     this.set({ phase: 'loading', error: undefined })
     this.loadPromise = this.call(
-      { type: 'load', baseUrl: q.get('modelBase') ?? undefined, forceWasm },
+      { type: 'load', baseUrl: q.get('modelBase') ?? undefined, forceWasm, lang: currentLang() },
       ['ready'],
       (r) => {
         if (r.type === 'progress') this.set({ loaded: r.loaded, total: r.total })
@@ -247,4 +250,30 @@ export function getEngine(): EngineClient {
     })
   }
   return singleton
+}
+
+export type Lang = 'he' | 'en'
+const LANG_KEY = 'mishkefet-lang'
+
+/** Handwriting language: `?lang=` for this visit, else the saved choice, else Hebrew. */
+export function currentLang(): Lang {
+  const q = new URLSearchParams(location.search).get('lang')
+  if (q === 'en' || q === 'he') return q
+  try {
+    return localStorage.getItem(LANG_KEY) === 'en' ? 'en' : 'he'
+  } catch {
+    return 'he'
+  }
+}
+
+/** Save the choice and reload: the worker loads one model per page. */
+export function setLang(lang: Lang): void {
+  const url = new URL(location.href)
+  url.searchParams.delete('lang')
+  try {
+    localStorage.setItem(LANG_KEY, lang)
+  } catch {
+    url.searchParams.set('lang', lang) // storage blocked: carry the choice in the URL instead
+  }
+  location.replace(url)
 }

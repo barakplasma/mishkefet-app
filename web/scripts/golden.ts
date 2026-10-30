@@ -107,7 +107,7 @@ async function main() {
     const wantLp = new Float32Array(want.buffer.slice(want.byteOffset, want.byteOffset + want.length))
     let drift = 0
     for (let i = 0; i < wantLp.length; i++) drift = Math.max(drift, Math.abs(wantLp[i] - lp.data[i]))
-    const beam = labelsToText(charset, beamSearch(lp, engine.lm, engine.words))
+    const beam = labelsToText(charset, beamSearch(lp, engine.lm!, engine.words!))
     if (beam === line.beam) beamSame++
     t = performance.now()
     const r = await readLine(engine, gray, { tta: 3 })

@@ -26,9 +26,21 @@ WORKDIR /src/web
 ENV ONNXRUNTIME_NODE_INSTALL=skip
 RUN npm ci --no-audit --no-fund && npm run build
 
+# English model: HTR-VT trained on IAM, exported to the app's format (tools/model-en).
+# Code pinned by git commit, weights by SHA-256; the output is the same for every platform.
+FROM --platform=$BUILDPLATFORM python:3.13-slim AS model-en
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.15.0 \
+ && pip install --no-cache-dir timm==1.0.30 numpy==2.5.3 onnx==1.23.2 onnxconverter-common==1.16.0 onnxruntime==1.29.0
+ADD https://github.com/YutingLi0606/HTR-VT.git#649ce7feca3ba55787498b0e1f4c48a38d403e07 /htrvt
+ADD --checksum=sha256:eee631c8fd6411c821eb014d0517cf3949bde3f8df6a7b79c30eb878b6a7b193 \
+    https://huggingface.co/Mir0da/HTR-VT-english/resolve/e2f2137900735f0d611d931a47879ab25fe6cf7a/best_CER.pth /ckpt/best_CER.pth
+COPY tools/model-en /src
+RUN python /src/export.py /htrvt /ckpt/best_CER.pth /out
+
 # Ferron (official image): distroless, non-root (nobody), automatic HTTPS built in.
 FROM ghcr.io/ferronweb/ferron:2
 COPY docker/ferron.kdl /etc/ferron.kdl
 COPY --from=build /src/web/dist /var/www/ferron/mishkefet-app
 COPY --from=build /model /var/www/ferron/mishkefet-app/hf
+COPY --from=model-en /out /var/www/ferron/mishkefet-app/hf-en
 EXPOSE 8080

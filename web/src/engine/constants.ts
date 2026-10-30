@@ -57,6 +57,21 @@ export const MODEL_FILES: readonly ModelFile[] = [
 
 export const MODEL_TOTAL_BYTES = MODEL_FILES.reduce((a, f) => a + f.bytes, 0)
 
+/**
+ * English model (HTR-VT on IAM), built into the Docker image by tools/model-en.
+ * Same-origin; its files, sizes and SHA-256s come from manifest.json next to them.
+ */
+export const EN_MODEL_BASE = '/mishkefet-app/hf-en/'
+
+/** How a model wants its line image: Hebrew takes any width, ink = 1; English takes 512 px, paper = 1. */
+export interface InputSpec {
+  /** Fixed input width: narrower lines are padded with paper, wider ones squashed. */
+  width?: number
+  invert: boolean
+}
+export const HE_INPUT: InputSpec = { invert: true }
+export const EN_INPUT: InputSpec = { width: 512, invert: false }
+
 export function modelUrl(path: string, revision = MODEL_REVISION): string {
   return `https://huggingface.co/${MODEL_REPO}/resolve/${revision}/${path}`
 }

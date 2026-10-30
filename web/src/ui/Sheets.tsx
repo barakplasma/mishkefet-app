@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Scan, Settings } from '../lib/db.ts'
-import type { ModelState } from '../lib/engine.ts'
+import { currentLang, setLang, type ModelState } from '../lib/engine.ts'
 import { dateLabel, linesLabel } from '../lib/text.ts'
 import { ChevronIcon } from './icons.tsx'
 
@@ -88,6 +88,10 @@ export function AboutSheet(props: { model: ModelState; settings: Settings | null
           <button className="sheet-row" onClick={() => setConfirm(true)}>לשכוח את כתב היד שלי<span className="sub">הסריקות נשארות</span></button>
         )
       ) : null}
+      <button className="sheet-row" onClick={() => setLang(currentLang() === 'en' ? 'he' : 'en')}>
+        {currentLang() === 'en' ? 'קריאת כתב יד בעברית' : 'Read English handwriting'}
+        <span className="sub">{currentLang() === 'en' ? 'Switch back to Hebrew' : 'מודל אנגלית (HTR-VT)'}</span>
+      </button>
       <a className="sheet-row" href={`${base}privacy.html`} style={{ textDecoration: 'none' }}>פרטיות<ChevronIcon /></a>
       <a className="sheet-row" href="https://github.com/itayinbarr/mishkefet-app" target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>קוד פתוח<ChevronIcon /></a>
     </div>

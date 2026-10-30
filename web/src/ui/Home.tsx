@@ -1,5 +1,5 @@
 import type { Settings } from '../lib/db.ts'
-import type { ModelState } from '../lib/engine.ts'
+import { currentLang, type ModelState } from '../lib/engine.ts'
 import { ROUND_SIZE } from '../lib/training.ts'
 import { GalleryIcon, ImportIcon, Logo, MenuIcon, PencilIcon } from './icons.tsx'
 
@@ -57,6 +57,8 @@ export function Home(props: {
       </div>
 
       <div className="home-bottom">
+        {/* Training renders Hebrew words for the Hebrew model; there is none for English. */}
+        {currentLang() === 'he' && (
         <button className="train-card" onClick={props.onTrain}>
           <div className="dot">
             <PencilIcon />
@@ -69,6 +71,7 @@ export function Home(props: {
             </div>
           </div>
         </button>
+        )}
       </div>
     </>
   )

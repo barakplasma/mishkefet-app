@@ -24,7 +24,7 @@ export type Backend = 'webgpu' | 'wasm'
 
 /** Main thread to worker. Every request carries an id echoed by its reply. */
 export type Request =
-  | { id: number; type: 'load'; baseUrl?: string; forceWasm?: boolean }
+  | { id: number; type: 'load'; baseUrl?: string; forceWasm?: boolean; lang?: 'he' | 'en' }
   /** Read a single line crop (RGBA from a canvas). */
   | { id: number; type: 'readLine'; rgba: Uint8ClampedArray; width: number; height: number; head?: HeadData; tta: number }
   /**

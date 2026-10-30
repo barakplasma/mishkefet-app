@@ -9,12 +9,15 @@
  * work offline.
  */
 
-import { MODEL_FILES, MODEL_REVISION, MODEL_TOTAL_BYTES, modelUrl, type ModelFile } from './constants.ts'
+import { EN_MODEL_BASE, MODEL_FILES, MODEL_REVISION, MODEL_TOTAL_BYTES, modelUrl, type ModelFile } from './constants.ts'
 
 export const CACHE_PREFIX = 'mishkefet-model-'
 export const CACHE_NAME = `${CACHE_PREFIX}${MODEL_REVISION.slice(0, 8)}`
 
-export type ModelBytes = Record<ModelFile['key'], Uint8Array>
+export type Lang = 'he' | 'en'
+/** The English model has no language model or word prior. */
+export type ModelBytes = Record<'backbone' | 'head' | 'charset', Uint8Array> & Partial<Record<'charlm' | 'words', Uint8Array>>
+const EN_CACHE_NAME = 'mishkefet-en-model'
 
 export interface LoadProgress {
   loaded: number
@@ -35,9 +38,11 @@ export class ModelDownloadError extends Error {
 
 const TOTAL_BYTES = MODEL_TOTAL_BYTES
 
-async function openCache(): Promise<Cache | null> {
+async function openCache(lang: Lang = 'he'): Promise<Cache | null> {
   try {
     if (typeof caches === 'undefined') return null
+    // English entries are keyed by SHA-256, so its cache needs no revision cleanup.
+    if (lang === 'en') return await caches.open(EN_CACHE_NAME)
     // Drop copies of older revisions.
     for (const name of await caches.keys()) {
       if (name.startsWith(CACHE_PREFIX) && name !== CACHE_NAME) await caches.delete(name)
@@ -125,22 +130,45 @@ async function download(f: ModelFile, onBytes: (n: number) => void, signal?: Abo
   }
 }
 
+/** The English file list, from the network when possible, else the copy cached on the last load (offline). */
+async function englishFiles(cache: Cache | null, signal?: AbortSignal): Promise<ModelFile[]> {
+  const url = `${EN_MODEL_BASE}manifest.json`
+  try {
+    const res = await fetch(url, { signal, cache: 'no-store' })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const text = await res.text()
+    await cache?.put(url, new Response(text)).catch(() => undefined)
+    return JSON.parse(text) as ModelFile[]
+  } catch (e) {
+    const hit = cache ? await cache.match(url).catch(() => undefined) : undefined
+    if (hit) return JSON.parse(await hit.text()) as ModelFile[]
+    const offline = typeof navigator !== 'undefined' && navigator.onLine === false
+    throw new ModelDownloadError(`English model manifest unavailable: ${(e as Error).message}`, offline, { cause: e })
+  }
+}
+
 /**
  * Returns the model files, from the cache when possible, downloading the rest.
  * `baseUrl` swaps the download origin (tests, mirrors); bytes are still checked
  * against the pinned SHA-256 and cached under the canonical Hugging Face URL.
  */
-export async function loadModelFiles(onProgress: (p: LoadProgress) => void, opts: { signal?: AbortSignal; baseUrl?: string } = {}): Promise<ModelBytes> {
-  const { signal, baseUrl } = opts
-  const cache = await openCache()
+export async function loadModelFiles(
+  onProgress: (p: LoadProgress) => void,
+  opts: { signal?: AbortSignal; baseUrl?: string; lang?: Lang } = {},
+): Promise<ModelBytes> {
+  const { signal, lang = 'he' } = opts
+  const cache = await openCache(lang)
+  const files = lang === 'en' ? await englishFiles(cache, signal) : MODEL_FILES
+  const baseUrl = lang === 'en' ? EN_MODEL_BASE : opts.baseUrl
+  const total = lang === 'en' ? files.reduce((a, f) => a + f.bytes, 0) : TOTAL_BYTES
   const out: Partial<ModelBytes> = {}
   let loaded = 0
   let downloaded = false
-  const report = (stage: LoadProgress['stage']) => onProgress({ loaded, total: TOTAL_BYTES, fromCache: !downloaded, stage })
+  const report = (stage: LoadProgress['stage']) => onProgress({ loaded, total, fromCache: !downloaded, stage })
   report('checking')
 
-  for (const f of MODEL_FILES) {
-    const url = modelUrl(f.path)
+  for (const f of files) {
+    const url = lang === 'en' ? `${EN_MODEL_BASE}${f.path}?sha=${f.sha256}` : modelUrl(f.path)
     const hit = cache ? await cache.match(url).catch(() => undefined) : undefined
     if (hit) {
       const bytes = new Uint8Array(await hit.arrayBuffer())

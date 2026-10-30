@@ -8,14 +8,14 @@
  */
 
 import type { InferenceSession, Tensor } from 'onnxruntime-common'
-import { FEATURE_DIM, LINE_HEIGHT } from './constants.ts'
+import { LINE_HEIGHT } from './constants.ts'
 
 export interface OrtModule {
   Tensor: typeof Tensor
 }
 
 export interface Features {
-  /** frames x 512, row-major. */
+  /** frames x dim, row-major (dim 512 for Hebrew, 768 for English). */
   values: Float32Array
   frames: number
 }
@@ -36,8 +36,9 @@ export function createBackbone(ort: OrtModule, session: InferenceSession): Backb
       // Own the memory: runtimes may reuse output buffers between runs.
       const values = new Float32Array((await t.getData()) as Float32Array)
       const frames = Number(t.dims[1])
+      const dim = Number(t.dims[2])
       t.dispose?.()
-      if (values.length !== frames * FEATURE_DIM) throw new Error(`features: got ${values.length} values for ${frames} frames`)
+      if (values.length !== frames * dim) throw new Error(`features: got ${values.length} values for ${frames} x ${dim}`)
       return { values, frames }
     },
   }

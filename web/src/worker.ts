@@ -16,7 +16,7 @@
 import type * as Ort from 'onnxruntime-web'
 import type { Backend, HeadData, Reply, Request, TrainView } from './engine/api.ts'
 import { parseCharset, textToLabels } from './engine/charset.ts'
-import { FEATURE_DIM } from './engine/constants.ts'
+import { EN_INPUT, FEATURE_DIM, HE_INPUT } from './engine/constants.ts'
 import { applyHead, parseHead } from './engine/head.ts'
 import { rgbaToGray, rgbToRgba } from './engine/image.ts'
 import { parseCharLM, parseWordLM } from './engine/lm.ts'
@@ -86,9 +86,8 @@ function ortFilesFor(backend: Backend): string[] {
   return [`${BASE}ort/${ORT_VERSION}/${stem}.mjs`, `${BASE}ort/${ORT_VERSION}/${stem}.wasm`]
 }
 
-/** One small line through the backbone; throws when the output is missing or not finite. */
-async function selfTest(ort: typeof Ort, session: Ort.InferenceSession): Promise<void> {
-  const width = 64
+/** One small line through the backbone (fixed-width models: their width); throws when the output is missing or not finite. */
+async function selfTest(ort: typeof Ort, session: Ort.InferenceSession, width: number): Promise<void> {
   const x = new Float32Array(64 * width)
   for (let i = 0; i < x.length; i++) x[i] = (i % 7) / 14
   const features = await createBackbone(ort, session).features(x, width)
@@ -98,14 +97,14 @@ async function selfTest(ort: typeof Ort, session: Ort.InferenceSession): Promise
   }
 }
 
-async function createSession(ort: typeof Ort, backend: Backend, bytes: Uint8Array): Promise<Ort.InferenceSession> {
+async function createSession(ort: typeof Ort, backend: Backend, bytes: Uint8Array, width = 64): Promise<Ort.InferenceSession> {
   const session = await ort.InferenceSession.create(bytes, {
     executionProviders: [backend],
     graphOptimizationLevel: 'all',
     logSeverityLevel: 3,
   })
   try {
-    await selfTest(ort, session)
+    await selfTest(ort, session, width)
   } catch (e) {
     await session.release().catch(() => undefined)
     throw e
@@ -130,27 +129,29 @@ async function createMatMul(ort: typeof Ort, backend: Backend): Promise<MatMul |
 
 async function load(id: number, req: Body<'load'>): Promise<Loaded> {
   const t0 = performance.now()
-  const files = await loadModelFiles((p) => post({ id, type: 'progress', loaded: p.loaded, total: p.total }), { baseUrl: req.baseUrl })
+  const lang = req.lang ?? 'he'
+  const files = await loadModelFiles((p) => post({ id, type: 'progress', loaded: p.loaded, total: p.total }), { baseUrl: req.baseUrl, lang })
   const charset = parseCharset(new TextDecoder().decode(files.charset))
   const baseHead = parseHead(files.head)
-  const lm = parseCharLM(files.charlm)
-  const words = parseWordLM(files.words, charset)
+  const lm = files.charlm && parseCharLM(files.charlm)
+  const words = files.words && parseWordLM(files.words, charset)
+  const input = lang === 'en' ? EN_INPUT : HE_INPUT
 
   let backend: Backend = !req.forceWasm && (await webgpuUsable()) ? 'webgpu' : 'wasm'
   let ort: typeof Ort
   let session: Ort.InferenceSession
   try {
     ort = await importOrt(backend)
-    session = await createSession(ort, backend, files.backbone)
+    session = await createSession(ort, backend, files.backbone, input.width)
   } catch (e) {
     if (backend === 'wasm') throw e
     console.warn('[mishkefet] WebGPU failed, falling back to WASM', e)
     backend = 'wasm'
     ort = await importOrt('wasm')
-    session = await createSession(ort, 'wasm', files.backbone)
+    session = await createSession(ort, 'wasm', files.backbone, input.width)
   }
   const matmul = await createMatMul(ort, backend)
-  const engine: Engine = { charset, lm, words, backbone: createBackbone(ort, session), baseHead }
+  const engine: Engine = { charset, lm, words, backbone: createBackbone(ort, session), baseHead, input }
   console.info(`[mishkefet] model ready on ${backend} in ${Math.round(performance.now() - t0)} ms`)
   return { engine, backend, matmul, ortFiles: ortFilesFor(backend) }
 }

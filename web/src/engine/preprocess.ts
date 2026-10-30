@@ -3,7 +3,7 @@
  * crop's own resolution, resize to height 64, invert. Plus the TTA views.
  */
 
-import { LINE_HEIGHT, MAX_WIDTH, MIN_WIDTH } from './constants.ts'
+import { HE_INPUT, LINE_HEIGHT, MAX_WIDTH, MIN_WIDTH, type InputSpec } from './constants.ts'
 import { bicubicResizeX, blurLarge, percentileSorted, resize, roundHalfEven, type Gray } from './image.ts'
 
 const EPS32 = Math.fround(1e-3)
@@ -35,15 +35,26 @@ export function modelWidth(width: number, height: number): number {
   return Math.max(MIN_WIDTH, Math.min(roundHalfEven(width * scale), MAX_WIDTH))
 }
 
-/** uint8 line crop to float32 (64, W), ink near 1, paper near 0. */
-export function preprocess(gray: Gray): { data: Float32Array; width: number } {
+/**
+ * uint8 line crop to float32 (64, W). Hebrew (default): ink near 1, paper near 0, W from
+ * the crop. A fixed-width spec (English): paper near 1, squashed to fit and padded with paper.
+ */
+export function preprocess(gray: Gray, spec: InputSpec = HE_INPUT): { data: Float32Array; width: number } {
   const g = contrastNormalize(gray)
   const scale = LINE_HEIGHT / Math.max(g.height, 1)
-  const newW = modelWidth(g.width, g.height)
-  const r = resize(g, newW, LINE_HEIGHT, scale < 1 ? 'area' : 'linear')
-  const out = new Float32Array(r.data.length)
-  for (let i = 0; i < out.length; i++) out[i] = 1 - Math.fround(r.data[i] / 255)
-  return { data: out, width: newW }
+  const newW = spec.width ? Math.max(1, Math.min(roundHalfEven(g.width * scale), spec.width)) : modelWidth(g.width, g.height)
+  // Squashing a long line to a fixed width needs area averaging, or thin strokes fall between samples.
+  const squashed = spec.width !== undefined && newW < g.width
+  const r = resize(g, newW, LINE_HEIGHT, scale < 1 || squashed ? 'area' : 'linear')
+  const width = spec.width ?? newW
+  const out = new Float32Array(LINE_HEIGHT * width).fill(spec.invert ? 0 : 1)
+  for (let y = 0; y < LINE_HEIGHT; y++) {
+    for (let x = 0; x < newW; x++) {
+      const v = Math.fround(r.data[y * newW + x] / 255)
+      out[y * width + x] = spec.invert ? 1 - v : v
+    }
+  }
+  return { data: out, width }
 }
 
 /** A TTA view: horizontal-only bicubic resize to max(8, trunc(w * s)) columns. */
