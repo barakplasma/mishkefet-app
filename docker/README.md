@@ -22,7 +22,8 @@ host, put it behind TLS (e.g. a k3s Ingress with cert-manager, or Caddy).
 - One line in `web/src/engine/constants.ts` is rewritten so the app loads the model from
   `/mishkefet-app/hf/<revision>/onnx/...` on the same origin instead of huggingface.co. The build fails
   if upstream changes that line.
-- nginx serves the static build on port 8080.
+- The final image is `cgr.dev/chainguard/static` (no shell, non-root) plus a tiny Go file
+  server (`docker/server/main.go`) on port 8080.
 
 ## License
 

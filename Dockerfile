@@ -26,8 +26,15 @@ WORKDIR /src/web
 ENV ONNXRUNTIME_NODE_INSTALL=skip
 RUN npm ci --no-audit --no-fund && npm run build
 
-FROM nginx:1.29-alpine
-COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /src/web/dist /usr/share/nginx/html/mishkefet-app
-COPY --from=build /model /usr/share/nginx/html/mishkefet-app/hf
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS server
+ARG TARGETARCH
+COPY docker/server/main.go /src/main.go
+RUN CGO_ENABLED=0 GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /server /src/main.go
+
+# No shell, no package manager, non-root (uid 65532).
+FROM cgr.dev/chainguard/static:latest
+COPY --from=server /server /server
+COPY --from=build /src/web/dist /srv/mishkefet-app
+COPY --from=build /model /srv/mishkefet-app/hf
 EXPOSE 8080
+ENTRYPOINT ["/server"]
