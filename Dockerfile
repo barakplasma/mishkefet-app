@@ -12,7 +12,7 @@ COPY web web
 # Model files at the revision upstream pins, verified against its SHA-256 list.
 RUN rev=$(sed -n 's/^REV="\(.*\)"/\1/p' tools/model/fetch-model.sh) \
  && mkdir -p /model/$rev/onnx && cd /model/$rev/onnx \
- && sed -n '/^[0-9a-f]\{64\} /p' /src/tools/model/fetch-model.sh | grep -v charset.json > SHA256SUMS \
+ && sed -n '/^[0-9a-f]\{64\} /p' /src/tools/model/fetch-model.sh > SHA256SUMS \
  && for n in $(awk '{print $2}' SHA256SUMS); do \
       curl -fsSL --retry 4 -o "$n" "https://huggingface.co/itayinbar/Mishkefet-v1/resolve/$rev/onnx/$n"; done \
  && sed -i 's/ /  /' SHA256SUMS && sha256sum -c SHA256SUMS && rm SHA256SUMS
