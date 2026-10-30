@@ -26,9 +26,12 @@ WORKDIR /src/web
 ENV ONNXRUNTIME_NODE_INSTALL=skip
 RUN npm ci --no-audit --no-fund && npm run build
 
-# Docker Hardened Image: no shell, no package manager, non-root (uid 65532).
-FROM dhi.io/caddy:2
+# 11notes/caddy: distroless (no shell), non-root 1000:1000, multi-arch, public on GHCR.
+FROM ghcr.io/11notes/caddy:2.11.7
 COPY docker/Caddyfile /etc/caddy/Caddyfile
-COPY --from=build /src/web/dist /usr/share/caddy/mishkefet-app
-COPY --from=build /model /usr/share/caddy/mishkefet-app/hf
+COPY --from=build /src/web/dist /srv/mishkefet-app
+COPY --from=build /model /srv/mishkefet-app/hf
 EXPOSE 8080
+# Base image's healthcheck probes :3000; ours listens on :8080.
+HEALTHCHECK CMD ["/usr/local/bin/localhealth", "http://127.0.0.1:8080/mishkefet-app/", "-I"]
+CMD ["run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]

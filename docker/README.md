@@ -9,9 +9,6 @@ docker run --rm -p 8080:8080 ghcr.io/barakplasma/mishkefet-app:latest
 
 Images: `linux/amd64` and `linux/arm64`, built by `.github/workflows/docker.yml` on every push to `main`.
 
-CI needs two repo secrets to pull the `dhi.io` base image: `DOCKERHUB_USERNAME` and
-`DOCKERHUB_TOKEN` (a Docker Hub access token with read access). Building locally needs `docker login dhi.io`.
-
 ## HTTPS is required off localhost
 
 The browser only allows the service worker, `crypto.subtle` (model hash check) and the camera
@@ -25,8 +22,8 @@ host, put it behind TLS (e.g. a k3s Ingress with cert-manager, or Caddy).
 - One line in `web/src/engine/constants.ts` is rewritten so the app loads the model from
   `/mishkefet-app/hf/<revision>/onnx/...` on the same origin instead of huggingface.co. The build fails
   if upstream changes that line.
-- The final image is Docker Hardened `dhi.io/caddy` (no shell, non-root) serving the build
-  on port 8080 (`docker/Caddyfile`).
+- The final image is [`ghcr.io/11notes/caddy`](https://github.com/11notes/docker-caddy)
+  (distroless, no shell, non-root `1000:1000`) serving the build on port 8080 (`docker/Caddyfile`).
 
 ## License
 
