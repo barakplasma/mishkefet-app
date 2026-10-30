@@ -20,7 +20,7 @@ host, put it behind TLS (e.g. a k3s Ingress with cert-manager, or Caddy).
 - Build stage downloads the model at the revision pinned in `tools/model/fetch-model.sh`
   and checks the SHA-256s listed there.
 - One line in `web/src/engine/constants.ts` is rewritten so the app loads the model from
-  `/mishkefet-app/hf/onnx/...` on the same origin instead of huggingface.co. The build fails
+  `/mishkefet-app/hf/<revision>/onnx/...` on the same origin instead of huggingface.co. The build fails
   if upstream changes that line.
 - nginx serves the static build on port 8080.
 
