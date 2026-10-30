@@ -26,15 +26,9 @@ WORKDIR /src/web
 ENV ONNXRUNTIME_NODE_INSTALL=skip
 RUN npm ci --no-audit --no-fund && npm run build
 
-FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS server
-ARG TARGETARCH
-COPY docker/server/main.go /src/main.go
-RUN CGO_ENABLED=0 GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /server /src/main.go
-
-# No shell, no package manager, non-root (uid 65532).
-FROM cgr.dev/chainguard/static:latest
-COPY --from=server /server /server
-COPY --from=build /src/web/dist /srv/mishkefet-app
-COPY --from=build /model /srv/mishkefet-app/hf
+# Docker Hardened Image: no shell, no package manager, non-root (uid 65532).
+FROM dhi.io/caddy:2
+COPY docker/Caddyfile /etc/caddy/Caddyfile
+COPY --from=build /src/web/dist /usr/share/caddy/mishkefet-app
+COPY --from=build /model /usr/share/caddy/mishkefet-app/hf
 EXPOSE 8080
-ENTRYPOINT ["/server"]
