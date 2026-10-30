@@ -28,8 +28,9 @@ RUN npm ci --no-audit --no-fund && npm run build
 
 # English model: HTR-VT trained on IAM, exported to the app's format (tools/model-en).
 # Code pinned by git commit, weights by SHA-256; the output is the same for every platform.
+# torchvision comes from the CPU index too: timm imports it, and the PyPI build lacks the CPU torch ops.
 FROM --platform=$BUILDPLATFORM python:3.13-slim AS model-en
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.15.0 \
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.15.0 torchvision==0.29.2 \
  && pip install --no-cache-dir timm==1.0.30 numpy==2.5.3 onnx==1.23.2 onnxconverter-common==1.16.0 onnxruntime==1.29.0
 ADD https://github.com/YutingLi0606/HTR-VT.git#649ce7feca3ba55787498b0e1f4c48a38d403e07 /htrvt
 ADD --checksum=sha256:eee631c8fd6411c821eb014d0517cf3949bde3f8df6a7b79c30eb878b6a7b193 \
