@@ -1,7 +1,0 @@
-# Non-root image: listen on an unprivileged port. TLS is left to the ingress in front.
-:8080 {
-	# The app is built with base path /mishkefet-app/ upstream.
-	redir / /mishkefet-app/
-	root * /srv
-	file_server
-}

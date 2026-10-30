@@ -1,0 +1,12 @@
+// Plain HTTP on :8080, for localhost or behind a TLS-terminating ingress.
+// An explicit port turns automatic TLS off. For automatic HTTPS, see docker/README.md.
+globals {
+  // IPv4: Docker port mapping and pods use it, and "::" fails where IPv6 is disabled.
+  listen_ip "0.0.0.0"
+}
+
+:8080 {
+  root "/var/www/ferron"
+  // The app is built with base path /mishkefet-app/ upstream.
+  status 302 url="/" location="/mishkefet-app/"
+}
