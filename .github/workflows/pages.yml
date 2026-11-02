@@ -42,9 +42,9 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      # No `enablement: true`: GITHUB_TOKEN cannot create a Pages site. Enable it once in
+      # Settings > Pages > Source: GitHub Actions.
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web/dist
