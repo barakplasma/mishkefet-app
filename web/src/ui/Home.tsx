@@ -1,5 +1,5 @@
 import type { Settings } from '../lib/db.ts'
-import { currentLang, type ModelState } from '../lib/engine.ts'
+import { currentLang, setLang, type ModelState } from '../lib/engine.ts'
 import { ROUND_SIZE } from '../lib/training.ts'
 import { GalleryIcon, ImportIcon, Logo, MenuIcon, PencilIcon } from './icons.tsx'
 
@@ -19,6 +19,7 @@ export function Home(props: {
 }) {
   const { model, settings, roundCount } = props
   const round = (settings?.rounds ?? 0) + 1
+  const en = currentLang() === 'en'
   const sub = roundCount === 0 ? `סבב ${round} · ${ROUND_SIZE} מילים עד ההתאמה הבאה` : `${roundCount} מתוך ${ROUND_SIZE} מילים עד ההתאמה הבאה`
   return (
     <>
@@ -43,10 +44,14 @@ export function Home(props: {
             <Logo width={124} height={80} sw={2.6} />
           </div>
         </button>
-        <div className="home-hint">לחצו לצילום כתב יד</div>
+        <div className="home-hint">{en ? 'Tap to photograph handwriting' : 'לחצו לצילום כתב יד'}</div>
         <button className="pill" style={{ marginTop: 18 }} onClick={props.onGallery}>
           <GalleryIcon />
           בחירה מהגלריה
+        </button>
+        {/* Always visible: the language switch used to live only in the About sheet. */}
+        <button className="pill small" style={{ marginTop: 10 }} onClick={() => setLang(en ? 'he' : 'en')}>
+          {en ? 'Reading English · עברית' : 'English · Read English handwriting'}
         </button>
         {model.phase === 'loading' && model.total > 0 && (
           <div className="model-note">
@@ -58,7 +63,7 @@ export function Home(props: {
 
       <div className="home-bottom">
         {/* Training renders Hebrew words for the Hebrew model; there is none for English. */}
-        {currentLang() === 'he' && (
+        {!en && (
         <button className="train-card" onClick={props.onTrain}>
           <div className="dot">
             <PencilIcon />
