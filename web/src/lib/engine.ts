@@ -133,9 +133,13 @@ export class EngineClient {
     return this.loadPromise
   }
 
-  /** TTA 3 where it is affordable; one view on the CPU path keeps a page under a few minutes. */
+  /**
+   * TTA 3 where it is affordable; one view on the CPU path keeps a page under a few minutes.
+   * English is always 1: every view is a full fixed 512 px pass (so 3x the time), and views
+   * wider than 512 px are squashed back to the same input.
+   */
   get tta(): number {
-    return this.state.backend === 'webgpu' ? 3 : 1
+    return this.state.backend === 'webgpu' && currentLang() === 'he' ? 3 : 1
   }
 
   async readLine(rgba: ImageData, head?: HeadData): Promise<LineResult> {
